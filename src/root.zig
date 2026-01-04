@@ -1,6 +1,10 @@
 const std = @import("std");
 
-const scope = std.log.scoped(.x);
+pub const auth = @import("auth.zig");
+
+pub const ID = enum(u32) {
+    _,
+};
 
 pub const Connection = struct {
     sock: std.posix.socket_t,
@@ -32,126 +36,110 @@ pub const Connection = struct {
     }
 
     pub fn validate(self: @This()) !void {
-        var buf: [1]u8 = .{0};
-        _ = try self.read(buf[0..]);
+        var header: [8]u8 = undefined;
 
-        _ = switch (buf[0]) {
-            0 => error.Failure,
-            1 => {},
-            2 => error.AuthenticationRequired,
-            else => error.UnknownReply,
-        } catch |err| {
-            var err_buf: [1028]u8 = undefined;
-            const n = self.read(&err_buf) catch return err;
-            scope.err("{s}\n", .{err_buf[0..n]});
-            return err;
-        };
+        var total: usize = 0;
+        while (total < header.len) : (total += 0) {
+            const n = try self.read(header[total..]);
+            total += n;
+        }
+
+        switch (header[0]) {
+            0 => return error.Failure,
+            1 => return,
+            2 => return error.AuthenticationRequired,
+            else => return error.UnknownReply,
+        }
     }
 };
 
-pub const auth = packed struct {
-    const name = "MIT-MAGIC-COOKIE-1";
+pub const Setup = struct {
+    resource_counter: u32,
+    resource_id_base: u32,
+    resource_id_mask: u32,
 
-    pub fn send(connection: Connection) !void {
-        const xauth_path = std.posix.getenv("XAUTHORITY") orelse return error.NoCookiePath;
-        const xauth_fd: std.posix.fd_t = try std.posix.openZ(xauth_path.ptr, .{}, 0);
-        defer std.posix.close(xauth_fd);
+    pub fn get(connection: Connection) !@This() {
+        var buf: [24]u8 = undefined;
+        var total: usize = 0;
 
-        var xauth_buf: [1024]u8 = undefined;
-        const n = try std.posix.read(xauth_fd, xauth_buf[0..]);
-
-        var cookie: [32]u8 = undefined;
-        const cookie_len = try findCookie(xauth_buf[0..n], &cookie);
-        std.debug.print("COOKIE: {d} {x}\n", .{ cookie_len, cookie[0..cookie_len] });
-
-        var header: [12]u8 = @splat(0);
-        header[0] = 'l';
-        std.mem.writeInt(u16, header[2..4], 11, .little); // protocol_major
-        std.mem.writeInt(u16, header[4..6], 0, .little); // protocol_minor
-        std.mem.writeInt(u16, header[6..8], @intCast(name.len), .little); // auth_name_len
-        std.mem.writeInt(u16, header[8..10], @intCast(cookie_len), .little); // auth_data_len
-
-        std.debug.print("header: {any}\n", .{header});
-
-        var buffer: [512]u8 = undefined;
-        @memcpy(buffer[0..header.len], header[0..]); // write header bytes
-        var pos: usize = header.len;
-
-        // write auth_name
-        @memcpy(buffer[pos .. pos + name.len], name);
-        pos += name.len;
-
-        // pad auth_name to 4 bytes
-        const name_pad = (4 - (pos % 4)) % 4;
-        for (0..name_pad) |i| {
-            buffer[pos + i] = 0;
+        while (total < buf.len) {
+            const n = try connection.read(buf[total..]);
+            if (n == 0) return error.ServerClosedConnection;
+            total += n;
         }
-        pos += name_pad;
 
-        // write cookie
-        @memcpy(buffer[pos .. pos + cookie_len], cookie[0..cookie_len]);
-        pos += cookie_len;
-
-        // pad cookie to 4 bytes
-        const cookie_pad = (4 - (pos % 4)) % 4;
-        for (0..cookie_pad) |i| {
-            buffer[pos + i] = 0;
-        }
-        pos += cookie_pad;
-
-        // send handshake
-        var written: usize = 0;
-        while (written < pos) written += try std.posix.write(connection.sock, buffer[written..pos]);
-        try connection.validate();
+        return .{
+            .resource_counter = 1,
+            .resource_id_base = std.mem.readInt(u32, buf[12..16], .little),
+            .resource_id_mask = std.mem.readInt(u32, buf[16..20], .little),
+        };
     }
 
-    pub fn findCookie(xauth_file: []const u8, buf: []u8) !usize {
-        var i: usize = 0;
-        while (i + 8 <= xauth_file.len) {
-            // --- family ---
-            if (i + 2 > xauth_file.len) break;
-            _ = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
-            i += 2;
+    pub fn nextId(self: *@This()) ID {
+        const id = self.resource_id_base | (self.resource_counter & self.resource_id_mask);
+        self.resource_counter += 1;
+        return @enumFromInt(id);
+    }
+};
 
-            // --- address ---
-            if (i + 2 > xauth_file.len) break;
-            const addr_len = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
-            i += 2;
-            if (i + addr_len > xauth_file.len) break;
-            i += addr_len;
+pub const window = struct {
+    pub fn open(connection: Connection, setup: *Setup, width: u16, height: u16) !ID {
+        const win_id = setup.nextId();
 
-            // --- display ---
-            if (i + 2 > xauth_file.len) break;
-            const disp_len = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
-            i += 2;
-            if (i + disp_len > xauth_file.len) break;
-            const disp_bytes = xauth_file[i .. i + disp_len];
-            _ = disp_bytes;
-            i += disp_len;
+        var buf: [64]u8 = @splat(0);
+        var pos: usize = 0;
 
-            // --- auth name ---
-            if (i + 2 > xauth_file.len) break;
-            const name_len = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
-            i += 2;
-            if (i + name_len > xauth_file.len) break;
-            const name_bytes = xauth_file[i .. i + name_len];
-            i += name_len;
+        buf[pos] = 1; // CreateWindow opcode
+        pos += 1;
+        buf[pos] = 0; // padding
+        pos += 1;
 
-            // --- auth data ---
-            if (i + 2 > xauth_file.len) break;
-            const data_len = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
-            i += 2;
-            if (i + data_len > xauth_file.len) break;
-            const data_bytes = xauth_file[i .. i + data_len];
-            i += data_len;
+        // length in 4-byte units (we’ll fix later)
+        pos += 2;
 
-            if (std.mem.eql(u8, name_bytes, name)) {
-                if (data_len > buf.len) return error.BufferTooSmall;
-                @memcpy(buf[0..data_len], data_bytes);
-                return data_len;
-            }
-        }
+        // window ID
+        std.mem.writeInt(u32, buf[pos .. pos + 4][0..4], @intFromEnum(win_id), .little);
+        pos += 4;
 
-        return error.CookieNotFound;
+        // parent = root window (we’ll assume 0 for now)
+        std.mem.writeInt(u32, buf[pos .. pos + 4][0..4], 0, .little);
+        pos += 4;
+
+        // x, y, width, height
+        std.mem.writeInt(u16, buf[pos .. pos + 2][0..2], 0, .little);
+        pos += 2;
+        std.mem.writeInt(u16, buf[pos .. pos + 2][0..2], 0, .little);
+        pos += 2;
+        std.mem.writeInt(u16, buf[pos .. pos + 2][0..2], width, .little);
+        pos += 2;
+        std.mem.writeInt(u16, buf[pos .. pos + 2][0..2], height, .little);
+        pos += 2;
+
+        // border width
+        std.mem.writeInt(u16, buf[pos .. pos + 2][0..2], 0, .little);
+        pos += 2;
+
+        // depth
+        buf[pos] = 0x01;
+        pos += 1;
+
+        // class
+        buf[pos] = 1;
+        pos += 1;
+
+        // visual = CopyFromParent
+        pos += 2;
+
+        // length in 4-byte units
+        const length: u16 = @intCast(pos / 4);
+        std.mem.writeInt(u16, buf[2..4], length, .little);
+
+        // send to server
+        var written: usize = 0;
+        while (written < pos) written += try std.posix.write(connection.sock, buf[written..pos]);
+
+        try connection.validate();
+
+        return win_id;
     }
 };
