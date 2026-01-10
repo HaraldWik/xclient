@@ -19,7 +19,6 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "xclient", .module = xclient },
             },
-            .link_libc = true,
         }),
     });
 

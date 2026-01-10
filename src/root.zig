@@ -11,8 +11,8 @@ pub const ID = enum(Tag) {
 pub const Connection = struct {
     sock: std.posix.socket_t,
 
-    pub fn open() !@This() {
-        const display = std.c.getenv("DISPLAY") orelse return error.NoDisplay;
+    pub fn open(init: std.process.Init) !@This() {
+        const display = init.minimal.environ.getPosix("DISPLAY") orelse return error.NoDisplay;
         var path_buf: [108]u8 = undefined;
         const path = try std.fmt.bufPrint(&path_buf, "/tmp/.X11-unix/X{s}\x00", .{display[1..]});
 

@@ -1,10 +1,10 @@
 const std = @import("std");
 const x = @import("xclient");
 
-pub fn main() !void {
-    const connection: x.Connection = try .open();
+pub fn main(init: std.process.Init) !void {
+    const connection: x.Connection = try .open(init);
     defer connection.close();
-    try x.auth.send(connection);
+    try x.auth.send(connection, init);
     var setup: x.Setup = try .get(connection);
 
     const window: x.Window = try .open(connection, &setup, setup.root_window, null, null, 900, 800);
