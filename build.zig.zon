@@ -2,7 +2,7 @@
     .name = .xclient,
     .version = "0.0.0",
     .fingerprint = 0x346de4c4da6f8cf6,
-    .minimum_zig_version = "0.16.0-dev.1484+d0ba6642b",
+    .minimum_zig_version = "0.16.0-dev.2040+c475f1fcd",
     .dependencies = .{},
     .paths = .{
         "build.zig",

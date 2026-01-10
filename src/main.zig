@@ -7,12 +7,8 @@ pub fn main() !void {
     try x.auth.send(connection);
     var setup: x.Setup = try .get(connection);
 
-    var buf: [128]u8 = undefined;
-    const n = try connection.read(&buf);
+    const window: x.Window = try .open(connection, &setup, setup.root_window, null, null, 900, 800);
 
-    std.debug.print("{s}\n", .{buf[0..n]});
-
-    const window = try x.window.open(connection, &setup, 900, 800);
     std.debug.print("{d}\n", .{@intFromEnum(window)});
 
     while (true) {}

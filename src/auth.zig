@@ -4,8 +4,8 @@ const Connection = @import("root.zig").Connection;
 const name = "MIT-MAGIC-COOKIE-1";
 
 pub fn send(connection: Connection) !void {
-    const xauth_path = std.posix.getenv("XAUTHORITY") orelse return error.NoCookiePath;
-    const xauth_fd: std.posix.fd_t = try std.posix.openZ(xauth_path.ptr, .{}, 0);
+    const xauth_path = std.c.getenv("XAUTHORITY") orelse return error.NoCookiePath;
+    const xauth_fd: std.posix.fd_t = try std.posix.openZ(xauth_path, .{}, 0);
     defer std.posix.close(xauth_fd);
 
     var xauth_buf: [1024]u8 = undefined;
