@@ -1,56 +1,45 @@
 const std = @import("std");
+const endian = @import("root.zig").endian;
 const Connection = @import("root.zig").Connection;
 
 const name = "MIT-MAGIC-COOKIE-1";
 
-pub fn send(connection: Connection, init: std.process.Init) !void {
-    const xauth_path = init.minimal.environ.getPosix("XAUTHORITY") orelse return error.NoCookiePath;
+// The header must be 12 bytes
+pub const Header = packed struct {
+    order: u8 = switch (endian) {
+        .little => 'l',
+        .big => 'B',
+    },
+    pad0: u8 = undefined,
+    protocol_major: u16 = 11,
+    protocol_minor: u16 = 0,
+    auth_name_len: u16,
+    auth_data_len: u16,
+    pad1: u16 = undefined,
+};
 
-    const xauth_fd: std.posix.fd_t = try std.posix.openZ(xauth_path, .{}, 0);
-    defer std.posix.close(xauth_fd);
+pub fn init(io: std.Io, minimal: std.process.Init.Minimal, writer: *std.Io.Writer) !void {
+    const xauth_path = minimal.environ.getPosix("XAUTHORITY") orelse return error.NoCookiePath;
 
-    var xauth_buf: [1024]u8 = undefined;
-    const n = try std.posix.read(xauth_fd, xauth_buf[0..]);
+    var xauth_buffer: [1024]u8 = undefined;
+    const dir = try std.Io.Dir.openDirAbsolute(io, std.fs.path.dirname(xauth_path).?, .{});
+    const xauth = try dir.readFile(io, std.fs.path.basename(xauth_path), &xauth_buffer);
 
     var cookie: [32]u8 = undefined;
-    const cookie_len = try findCookie(xauth_buf[0..n], &cookie);
+    const cookie_len = try findCookie(xauth, &cookie);
 
-    var header: [12]u8 = @splat(0);
-    header[0] = 'l';
-    std.mem.writeInt(u16, header[2..4], 11, .little); // protocol_major
-    std.mem.writeInt(u16, header[4..6], 0, .little); // protocol_minor
-    std.mem.writeInt(u16, header[6..8], @intCast(name.len), .little); // auth_name_len
-    std.mem.writeInt(u16, header[8..10], @intCast(cookie_len), .little); // auth_data_len
+    const header: Header = .{
+        .auth_name_len = @intCast(name.len),
+        .auth_data_len = @intCast(cookie_len),
+    };
 
-    var buffer: [512]u8 = undefined;
-    @memcpy(buffer[0..header.len], header[0..]); // write header bytes
-    var pos: usize = header.len;
+    try writer.writeStruct(header, endian);
+    try writer.writeAll(name);
+    writer.end += (4 - (writer.end % 4)) % 4; // Padding
+    try writer.writeAll(cookie[0..cookie_len]);
+    writer.end += (4 - (writer.end % 4)) % 4; // Padding
 
-    // write auth_name
-    @memcpy(buffer[pos .. pos + name.len], name);
-    pos += name.len;
-
-    // pad auth_name to 4 bytes
-    const name_pad = (4 - (pos % 4)) % 4;
-    for (0..name_pad) |i| {
-        buffer[pos + i] = 0;
-    }
-    pos += name_pad;
-
-    // write cookie
-    @memcpy(buffer[pos .. pos + cookie_len], cookie[0..cookie_len]);
-    pos += cookie_len;
-
-    // pad cookie to 4 bytes
-    const cookie_pad = (4 - (pos % 4)) % 4;
-    for (0..cookie_pad) |i| {
-        buffer[pos + i] = 0;
-    }
-    pos += cookie_pad;
-
-    // send handshake
-    var written: usize = 0;
-    while (written < pos) written += try std.posix.write(connection.sock, buffer[written..pos]);
+    try writer.flush();
 }
 
 pub fn findCookie(xauth_file: []const u8, buf: []u8) !usize {
