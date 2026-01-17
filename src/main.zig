@@ -1,90 +1,323 @@
 const std = @import("std");
-const x = @import("xclient");
+const posix = std.posix;
+const mem = std.mem;
 
-pub fn main(init: std.process.Init) !void {
-    const io = init.io;
+const READ_BUFFER_SIZE = 16 * 1024;
 
-    const connection: x.Connection = try .open(io, init.minimal);
+// X11 response states
+const RESPONSE_STATE_FAILED = 0;
+const RESPONSE_STATE_SUCCESS = 1;
+const RESPONSE_STATE_AUTHENTICATE = 2;
+
+// X11 opcodes
+const X11_REQUEST_CREATE_WINDOW = 1;
+const X11_REQUEST_MAP_WINDOW = 8;
+
+// Event flags
+const X11_EVENT_FLAG_KEY_PRESS = 0x00000001;
+const X11_EVENT_FLAG_KEY_RELEASE = 0x00000002;
+const X11_EVENT_FLAG_EXPOSURE = 0x8000;
+
+// Window flags
+const X11_FLAG_BACKGROUND_PIXEL = 0x00000002;
+const X11_FLAG_WIN_EVENT = 0x00000800;
+
+// Window classes
+const WINDOWCLASS_COPYFROMPARENT = 0;
+const WINDOWCLASS_INPUTOUTPUT = 1;
+const WINDOWCLASS_INPUTONLY = 2;
+
+// Globals (same as C)
+var GlobalId: i32 = 0;
+var GlobalIdBase: i32 = 0;
+var GlobalIdMask: i32 = 0;
+var GlobalRootWindow: i32 = 0;
+var GlobalRootVisualId: i32 = 0;
+
+// PAD macro
+fn pad(n: usize) usize {
+    return (4 - (n % 4)) % 4;
+}
+
+fn verifyOrDie(ok: bool, msg: []const u8) noreturn {
+    if (!ok) {
+        std.debug.print("{s}\n", .{msg});
+        std.process.exit(13);
+    }
+    unreachable;
+}
+
+fn verifyOrDieErrno(ok: bool, msg: []const u8) noreturn {
+    if (!ok) {
+        std.debug.print("{s}: {}\n", .{ msg, std.posix.errno() });
+        std.process.exit(13);
+    }
+    unreachable;
+}
+
+fn getNextId() i32 {
+    const result = (GlobalIdMask & GlobalId) | GlobalIdBase;
+    GlobalId += 1;
+    return result;
+}
+
+fn printResponseError(buf: []const u8) void {
+    const code = buf[1];
+    std.debug.print("\x1b[31mResponse Error: [{d}]\x1b[0m\n", .{code});
+}
+
+fn printAndProcessEvent(buf: []const u8) void {
+    std.debug.print("Some event occurred: {d}\n", .{buf[0]});
+}
+
+fn getAndProcessReply(fd: posix.fd_t) !void {
+    var buffer: [1024]u8 = undefined;
+    const bytes_read = try posix.read(fd, &buffer);
+    if (bytes_read == 0) return;
+
+    const code = buffer[0];
+    if (code == 0) {
+        printResponseError(buffer[0..bytes_read]);
+    } else if (code == 1) {
+        std.debug.print("---- Unexpected reply\n", .{});
+    } else {
+        printAndProcessEvent(buffer[0..bytes_read]);
+    }
+}
+
+// xhost +local: / xhost -local:
+
+pub fn main(minimal: std.process.Init.Minimal) !void {
+    // Create socket
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const connection: Connection = try .initExplicit(io, Connection.default_display_path, null);
     defer connection.close(io);
+    _ = minimal;
+    const sock = connection.stream.socket.handle;
 
-    var connection_reader_buffer: [4096]u8 = undefined;
-    var connection_reader = connection.reader(io, &connection_reader_buffer);
-    const reader = &connection_reader.interface;
+    var read_buf: [READ_BUFFER_SIZE]u8 = undefined;
+    var stream_reader = connection.stream.reader(io, &read_buf);
+    const reader = &stream_reader.interface;
 
-    var connection_writer_buffer: [4096]u8 = undefined;
-    var connection_writer = connection.writer(io, &connection_writer_buffer);
-    const writer = &connection_writer.interface;
+    var send_buf: [READ_BUFFER_SIZE]u8 = undefined;
+    var stream_writer = connection.stream.writer(io, &send_buf);
 
-    try x.auth.init(io, init.minimal, writer);
+    const writer = &stream_writer.interface;
+    _ = writer;
 
-    var setup: x.Setup = try .get(reader);
-    const root = setup.root_screen;
+    // Initialization request
 
-    const window = setup.nextId(x.Window);
-    try window.create(
-        writer,
-        0,
-        root.window,
-        100,
-        200,
-        600,
-        400,
-        0,
-        .input_output,
-        root.root_visual_id,
-        .{ .event_mask = true },
-        &.{.{
-            .exposure = true,
-            .structure_notify = true,
-            .key_press = true,
-            // .key_release = true,
-            // .button_press = true,
-            // .button_release = true,
-            // .pointer_motion = true,
-        }},
-    );
-    defer window.destroy(writer);
-    try window.map(writer);
-    try writer.flush();
+    _ = try connection.stream.socket.receive(io, reader.buffer[0..8]);
 
-    while (true) {
-        const event_str = try reader.take(32);
-        var fixed_event_reader: std.Io.Reader = .fixed(event_str);
-        const event_reader = &fixed_event_reader;
-        const t: x.Event.Type = @enumFromInt(try event_reader.takeByte());
-
-        switch (t) {
-            .gravity_notify => {
-                const data = try event_reader.takeStruct(x.Event.GravityNotify, x.endian);
-                std.debug.print("DATA: {any}\n", .{data});
-            },
-            else => switch (t) {
-                _ => std.debug.print("event: {d}\n", .{@intFromEnum(t)}),
-                else => std.debug.print("event: {t}\n", .{t}),
-            },
-        }
-
-        reader.tossBuffered();
-        // switch (event.type) {
-        // _ => std.debug.print("type: {d}\n", .{@intFromEnum(event.type)}),
-        // else => std.debug.print("type: {t}\n", .{event.type}),
-        // }
+    switch (reader.buffer[0]) {
+        RESPONSE_STATE_FAILED => {
+            std.debug.print("X11 init failed\n", .{});
+            return;
+        },
+        RESPONSE_STATE_AUTHENTICATE => {
+            std.debug.print("Authentication required.\nRun: xhost +local:\n", .{});
+            return;
+        },
+        RESPONSE_STATE_SUCCESS => {},
+        else => return,
     }
 
-    // while (true) {
-    //     const event = try reader.takeStruct(XEvent, .little);
-    //     switch (event.type) {
-    //         EventType.Expose => {
-    //             // redraw your window here
-    //         },
-    //         EventType.KeyPress => {
-    //             // handle key press
-    //         },
-    //         EventType.ButtonPress => {
-    //             // handle mouse click
-    //         },
-    //         else => {},
-    //     }
-    // }
+    _ = try connection.stream.socket.receive(io, reader.buffer[8..]);
 
+    const resource_base = mem.readInt(u32, read_buf[12..16], .little);
+    const resource_mask = mem.readInt(u32, read_buf[16..20], .little);
+    const vendor_len = mem.readInt(u16, read_buf[24..26], .little);
+    const num_formats = read_buf[29];
+
+    const vendor_pad = pad(vendor_len);
+    const formats_len = 8 * num_formats;
+    const screens_offset = 40 + vendor_len + vendor_pad + formats_len;
+
+    const root_window = mem.readInt(u32, read_buf[screens_offset .. screens_offset + 4][0..4], .little);
+    const root_visual = mem.readInt(u32, read_buf[screens_offset + 32 .. screens_offset + 36][0..4], .little);
+
+    GlobalIdBase = @intCast(resource_base);
+    GlobalIdMask = @intCast(resource_mask);
+    GlobalRootWindow = @intCast(root_window);
+    GlobalRootVisualId = @intCast(root_visual);
+
+    // Create window
+    const window_id = getNextId();
+    const depth: u8 = 0;
+    const x: i16 = 100;
+    const y: i16 = 100;
+    const width: u16 = 600;
+    const height: u16 = 300;
+    const border_width: u16 = 1;
+
+    const flag_count = 2;
+    const request_length: u16 = 8 + flag_count;
+
+    @memset(send_buf[0..], 0);
+    send_buf[0] = X11_REQUEST_CREATE_WINDOW;
+    send_buf[1] = depth;
+    mem.writeInt(u16, send_buf[2..4], request_length, .little);
+    mem.writeInt(u32, send_buf[4..8], @bitCast(window_id), .little);
+    mem.writeInt(u32, send_buf[8..12], @bitCast(GlobalRootWindow), .little);
+    mem.writeInt(i16, send_buf[12..14], x, .little);
+    mem.writeInt(i16, send_buf[14..16], y, .little);
+    mem.writeInt(u16, send_buf[16..18], width, .little);
+    mem.writeInt(u16, send_buf[18..20], height, .little);
+    mem.writeInt(u16, send_buf[20..22], border_width, .little);
+    mem.writeInt(u16, send_buf[22..24], WINDOWCLASS_INPUTOUTPUT, .little);
+    mem.writeInt(u32, send_buf[24..28], @bitCast(GlobalRootVisualId), .little);
+    mem.writeInt(u32, send_buf[28..32], X11_FLAG_WIN_EVENT | X11_FLAG_BACKGROUND_PIXEL, .little);
+    mem.writeInt(u32, send_buf[32..36], 0xff000000, .little);
+    mem.writeInt(u32, send_buf[36..40], X11_EVENT_FLAG_EXPOSURE | X11_EVENT_FLAG_KEY_PRESS, .little);
+
+    _ = try posix.write(sock, send_buf[0 .. request_length * 4]);
+
+    // Map window
+    @memset(send_buf[0..], 0);
+    send_buf[0] = X11_REQUEST_MAP_WINDOW;
+    mem.writeInt(u16, send_buf[2..4], 2, .little);
+    mem.writeInt(u32, send_buf[4..8], @bitCast(window_id), .little);
+    _ = try posix.write(sock, send_buf[0..8]);
+
+    // Poll loop
+    var pfd = [_]posix.pollfd{
+        .{
+            .fd = sock,
+            .events = posix.POLL.IN,
+            .revents = 0,
+        },
+    };
+
+    while (true) {
+        _ = try posix.poll(&pfd, -1);
+
+        if ((pfd[0].revents & posix.POLL.ERR) != 0) {
+            std.debug.print("---- Poll error\n", .{});
+        }
+
+        if ((pfd[0].revents & posix.POLL.HUP) != 0) {
+            std.debug.print("---- Connection closed\n", .{});
+            break;
+        }
+
+        try getAndProcessReply(sock);
+    }
 }
+
+pub const Connection = struct {
+    stream: std.Io.net.Stream,
+
+    pub const default_display_path = "/tmp/.X11-unix/X0";
+    pub const auth_protocol = "MIT-MAGIC-COOKIE-1";
+
+    const Header = extern struct {
+        order: u8 = 'l',
+        pad0: u8 = undefined,
+        protocol_major: u16 = 11,
+        protocol_minor: u16 = 0,
+        auth_name_len: u16 = 0,
+        auth_data_len: u16 = 0,
+        pad1: u16 = undefined,
+    };
+
+    pub fn init(io: std.Io, minimal: std.process.Init.Minimal) !@This() {
+        const display_path = default_display_path; // minimal.environ.getPosix("DISPLAY")
+        const xauthority = minimal.environ.getPosix("XAUTHORITY");
+        return initExplicit(io, display_path, xauthority);
+    }
+
+    pub fn initExplicit(io: std.Io, display_path: []const u8, xauthority: ?[]const u8) !@This() {
+        const address: std.Io.net.UnixAddress = try .init(display_path);
+        const stream = try address.connect(io);
+
+        var stream_writer_buffer: [@sizeOf(Header)]u8 = undefined;
+        var stream_writer = stream.writer(io, &stream_writer_buffer);
+        const writer = &stream_writer.interface;
+
+        if (xauthority != null) {
+            var cookie_buffer: [32]u8 = undefined;
+            const cookie_len = try findCookie(io, xauthority.?, &cookie_buffer);
+            const cookie = cookie_buffer[0..cookie_len];
+
+            const header: Header = .{
+                .auth_name_len = @intCast(auth_protocol.len),
+                .auth_data_len = @intCast(cookie.len),
+            };
+
+            try writer.writeStruct(header, .little);
+            try writer.writeAll(auth_protocol);
+            writer.end += (4 - (writer.end % 4)) % 4; // Padding
+            try writer.writeAll(cookie[0..cookie_len]);
+            writer.end += (4 - (writer.end % 4)) % 4; // Padding
+        } else {
+            const header: Header = .{};
+            try writer.writeStruct(header, .little);
+        }
+
+        try writer.flush();
+
+        return .{ .stream = stream };
+    }
+
+    pub fn close(self: @This(), io: std.Io) void {
+        self.stream.close(io);
+    }
+
+    // TODO: clean this mess up
+    fn findCookie(io: std.Io, xauthority: []const u8, buf: []u8) !usize {
+        var xauth_buffer: [1024]u8 = undefined;
+        const dir = try std.Io.Dir.openDirAbsolute(io, std.fs.path.dirname(xauthority).?, .{});
+        const xauth_file = try dir.readFile(io, std.fs.path.basename(xauthority), &xauth_buffer);
+
+        var i: usize = 0;
+        while (i + 8 <= xauth_file.len) {
+            // --- family ---
+            if (i + 2 > xauth_file.len) break;
+            _ = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
+            i += 2;
+
+            // --- address ---
+            if (i + 2 > xauth_file.len) break;
+            const addr_len = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
+            i += 2;
+            if (i + addr_len > xauth_file.len) break;
+            i += addr_len;
+
+            // --- display ---
+            if (i + 2 > xauth_file.len) break;
+            const disp_len = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
+            i += 2;
+            if (i + disp_len > xauth_file.len) break;
+            const disp_bytes = xauth_file[i .. i + disp_len];
+            _ = disp_bytes;
+            i += disp_len;
+
+            // --- auth name ---
+            if (i + 2 > xauth_file.len) break;
+            const name_len = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
+            i += 2;
+            if (i + name_len > xauth_file.len) break;
+            const name_bytes = xauth_file[i .. i + name_len];
+            i += name_len;
+
+            // --- auth data ---
+            if (i + 2 > xauth_file.len) break;
+            const data_len = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
+            i += 2;
+            if (i + data_len > xauth_file.len) break;
+            const data_bytes = xauth_file[i .. i + data_len];
+            i += data_len;
+
+            if (std.mem.eql(u8, name_bytes, auth_protocol)) {
+                if (data_len > buf.len) return error.BufferTooSmall;
+                @memcpy(buf[0..data_len], data_bytes);
+                return data_len;
+            }
+        }
+
+        return error.CookieNotFound;
+    }
+};

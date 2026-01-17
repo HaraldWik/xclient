@@ -5,6 +5,17 @@ pub const auth = @import("auth.zig");
 
 pub const endian: std.builtin.Endian = .little;
 
+pub const Error = extern struct {
+    type: u8 = 0, // always 0
+    error_code: u8,
+    sequence: u16,
+    resource_id: u32,
+    minor_opcode: u16,
+    major_opcode: u8,
+    pad0: u8,
+    pad1: [21]u8,
+};
+
 pub const ID = enum(Tag) {
     _,
 

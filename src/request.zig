@@ -122,7 +122,7 @@ pub const Opcode = enum(u8) {
     get_modifier_mapping = 119,
 };
 
-pub const Header = packed struct {
+pub const Header = extern struct {
     opcode: Opcode, // X11 request code
     detail: u8 = 0, // usually 0
     length: u16, // total length of request in 4-byte units
@@ -133,13 +133,13 @@ pub const Header = packed struct {
 };
 
 pub const window = struct {
-    pub const Create = packed struct {
+    pub const Create = extern struct {
         header: Header = .{
             .opcode = .create_window,
             .length = Header.len(@This()),
         },
         depth: u8, // usually CopyFromParent = 0
-        pad0: u24 = undefined, // 3 byte padding for alignment
+        pad0: [3]u8 = undefined, // 3 byte padding for alignment
         window: root.Window, // XID of the window you’re creating
         parent: root.Window, // root window ID
         x: i16,
@@ -174,7 +174,7 @@ pub const window = struct {
         };
     };
 
-    pub const Destroy = packed struct {
+    pub const Destroy = extern struct {
         header: Header = .{
             .opcode = .destroy_window,
             .length = Header.len(@This()),
@@ -182,7 +182,7 @@ pub const window = struct {
         window: root.Window,
     };
 
-    pub const Map = packed struct {
+    pub const Map = extern struct {
         header: Header = .{
             .opcode = .map_window,
             .length = Header.len(@This()),
