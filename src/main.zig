@@ -1,4 +1,5 @@
 const std = @import("std");
+const x = @import("xclient");
 const posix = std.posix;
 const mem = std.mem;
 
@@ -93,7 +94,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
     defer threaded.deinit();
     const io = threaded.io();
 
-    const connection: Connection = try .initExplicit(io, Connection.default_display_path, null);
+    const connection: x.Connection = try .initExplicit(io, x.Connection.default_display_path, null);
     defer connection.close(io);
     _ = minimal;
     const sock = connection.stream.socket.handle;
@@ -107,9 +108,6 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
 
     const writer = &stream_writer.interface;
     _ = writer;
-
-    // Initialization request
-
     _ = try connection.stream.socket.receive(io, reader.buffer[0..8]);
 
     switch (reader.buffer[0]) {
@@ -146,9 +144,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
 
     // Create window
     const window_id = getNextId();
-    const depth: u8 = 0;
-    const x: i16 = 100;
-    const y: i16 = 100;
+
     const width: u16 = 600;
     const height: u16 = 300;
     const border_width: u16 = 1;
@@ -158,12 +154,12 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
 
     @memset(send_buf[0..], 0);
     send_buf[0] = X11_REQUEST_CREATE_WINDOW;
-    send_buf[1] = depth;
+    send_buf[1] = 0;
     mem.writeInt(u16, send_buf[2..4], request_length, .little);
     mem.writeInt(u32, send_buf[4..8], @bitCast(window_id), .little);
     mem.writeInt(u32, send_buf[8..12], @bitCast(GlobalRootWindow), .little);
-    mem.writeInt(i16, send_buf[12..14], x, .little);
-    mem.writeInt(i16, send_buf[14..16], y, .little);
+    mem.writeInt(i16, send_buf[12..14], 100, .little);
+    mem.writeInt(i16, send_buf[14..16], 100, .little);
     mem.writeInt(u16, send_buf[16..18], width, .little);
     mem.writeInt(u16, send_buf[18..20], height, .little);
     mem.writeInt(u16, send_buf[20..22], border_width, .little);
@@ -206,118 +202,3 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
         try getAndProcessReply(sock);
     }
 }
-
-pub const Connection = struct {
-    stream: std.Io.net.Stream,
-
-    pub const default_display_path = "/tmp/.X11-unix/X0";
-    pub const auth_protocol = "MIT-MAGIC-COOKIE-1";
-
-    const Header = extern struct {
-        order: u8 = 'l',
-        pad0: u8 = undefined,
-        protocol_major: u16 = 11,
-        protocol_minor: u16 = 0,
-        auth_name_len: u16 = 0,
-        auth_data_len: u16 = 0,
-        pad1: u16 = undefined,
-    };
-
-    pub fn init(io: std.Io, minimal: std.process.Init.Minimal) !@This() {
-        const display_path = default_display_path; // minimal.environ.getPosix("DISPLAY")
-        const xauthority = minimal.environ.getPosix("XAUTHORITY");
-        return initExplicit(io, display_path, xauthority);
-    }
-
-    pub fn initExplicit(io: std.Io, display_path: []const u8, xauthority: ?[]const u8) !@This() {
-        const address: std.Io.net.UnixAddress = try .init(display_path);
-        const stream = try address.connect(io);
-
-        var stream_writer_buffer: [@sizeOf(Header)]u8 = undefined;
-        var stream_writer = stream.writer(io, &stream_writer_buffer);
-        const writer = &stream_writer.interface;
-
-        if (xauthority != null) {
-            var cookie_buffer: [32]u8 = undefined;
-            const cookie_len = try findCookie(io, xauthority.?, &cookie_buffer);
-            const cookie = cookie_buffer[0..cookie_len];
-
-            const header: Header = .{
-                .auth_name_len = @intCast(auth_protocol.len),
-                .auth_data_len = @intCast(cookie.len),
-            };
-
-            try writer.writeStruct(header, .little);
-            try writer.writeAll(auth_protocol);
-            writer.end += (4 - (writer.end % 4)) % 4; // Padding
-            try writer.writeAll(cookie[0..cookie_len]);
-            writer.end += (4 - (writer.end % 4)) % 4; // Padding
-        } else {
-            const header: Header = .{};
-            try writer.writeStruct(header, .little);
-        }
-
-        try writer.flush();
-
-        return .{ .stream = stream };
-    }
-
-    pub fn close(self: @This(), io: std.Io) void {
-        self.stream.close(io);
-    }
-
-    // TODO: clean this mess up
-    fn findCookie(io: std.Io, xauthority: []const u8, buf: []u8) !usize {
-        var xauth_buffer: [1024]u8 = undefined;
-        const dir = try std.Io.Dir.openDirAbsolute(io, std.fs.path.dirname(xauthority).?, .{});
-        const xauth_file = try dir.readFile(io, std.fs.path.basename(xauthority), &xauth_buffer);
-
-        var i: usize = 0;
-        while (i + 8 <= xauth_file.len) {
-            // --- family ---
-            if (i + 2 > xauth_file.len) break;
-            _ = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
-            i += 2;
-
-            // --- address ---
-            if (i + 2 > xauth_file.len) break;
-            const addr_len = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
-            i += 2;
-            if (i + addr_len > xauth_file.len) break;
-            i += addr_len;
-
-            // --- display ---
-            if (i + 2 > xauth_file.len) break;
-            const disp_len = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
-            i += 2;
-            if (i + disp_len > xauth_file.len) break;
-            const disp_bytes = xauth_file[i .. i + disp_len];
-            _ = disp_bytes;
-            i += disp_len;
-
-            // --- auth name ---
-            if (i + 2 > xauth_file.len) break;
-            const name_len = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
-            i += 2;
-            if (i + name_len > xauth_file.len) break;
-            const name_bytes = xauth_file[i .. i + name_len];
-            i += name_len;
-
-            // --- auth data ---
-            if (i + 2 > xauth_file.len) break;
-            const data_len = std.mem.readInt(u16, xauth_file[i..][0..2], .big);
-            i += 2;
-            if (i + data_len > xauth_file.len) break;
-            const data_bytes = xauth_file[i .. i + data_len];
-            i += data_len;
-
-            if (std.mem.eql(u8, name_bytes, auth_protocol)) {
-                if (data_len > buf.len) return error.BufferTooSmall;
-                @memcpy(buf[0..data_len], data_bytes);
-                return data_len;
-            }
-        }
-
-        return error.CookieNotFound;
-    }
-};

@@ -138,7 +138,7 @@ pub const window = struct {
             .opcode = .create_window,
             .length = Header.len(@This()),
         },
-        depth: u8, // usually CopyFromParent = 0
+        depth: u8 = 0, // usually CopyFromParent = 0
         pad0: [3]u8 = undefined, // 3 byte padding for alignment
         window: root.Window, // XID of the window you’re creating
         parent: root.Window, // root window ID
