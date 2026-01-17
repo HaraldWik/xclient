@@ -1,5 +1,6 @@
 const std = @import("std");
 const x = @import("xclient");
+const request = x.request;
 const posix = std.posix;
 const mem = std.mem;
 
@@ -11,7 +12,6 @@ const RESPONSE_STATE_SUCCESS = 1;
 const RESPONSE_STATE_AUTHENTICATE = 2;
 
 // X11 opcodes
-const X11_REQUEST_CREATE_WINDOW = 1;
 const X11_REQUEST_MAP_WINDOW = 8;
 
 // Event flags
@@ -29,11 +29,11 @@ const WINDOWCLASS_INPUTOUTPUT = 1;
 const WINDOWCLASS_INPUTONLY = 2;
 
 // Globals (same as C)
-var GlobalId: i32 = 0;
-var GlobalIdBase: i32 = 0;
-var GlobalIdMask: i32 = 0;
-var GlobalRootWindow: i32 = 0;
-var GlobalRootVisualId: i32 = 0;
+var GlobalId: u32 = 0;
+var GlobalIdBase: u32 = 0;
+var GlobalIdMask: u32 = 0;
+var GlobalRootWindow: u32 = 0;
+var GlobalRootVisualId: u32 = 0;
 
 // PAD macro
 fn pad(n: usize) usize {
@@ -56,7 +56,7 @@ fn verifyOrDieErrno(ok: bool, msg: []const u8) noreturn {
     unreachable;
 }
 
-fn getNextId() i32 {
+fn getNextId() u32 {
     const result = (GlobalIdMask & GlobalId) | GlobalIdBase;
     GlobalId += 1;
     return result;
@@ -68,7 +68,7 @@ fn printResponseError(buf: []const u8) void {
 }
 
 fn printAndProcessEvent(buf: []const u8) void {
-    std.debug.print("Some event occurred: {d}\n", .{buf[0]});
+    std.debug.print("Some event occurred: {t}\n", .{@as(x.Event.Type, @enumFromInt(buf[0]))});
 }
 
 fn getAndProcessReply(fd: posix.fd_t) !void {
@@ -88,7 +88,8 @@ fn getAndProcessReply(fd: posix.fd_t) !void {
 
 // xhost +local: / xhost -local:
 
-pub fn main(minimal: std.process.Init.Minimal) !void {
+pub fn main(init: std.process.Init.Minimal) !void {
+    _ = init;
     // Create socket
     var threaded: std.Io.Threaded = .init_single_threaded;
     defer threaded.deinit();
@@ -96,8 +97,6 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
 
     const connection: x.Connection = try .initExplicit(io, x.Connection.default_display_path, null);
     defer connection.close(io);
-    _ = minimal;
-    const sock = connection.stream.socket.handle;
 
     var read_buf: [READ_BUFFER_SIZE]u8 = undefined;
     var stream_reader = connection.stream.reader(io, &read_buf);
@@ -107,7 +106,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
     var stream_writer = connection.stream.writer(io, &send_buf);
 
     const writer = &stream_writer.interface;
-    _ = writer;
+
     _ = try connection.stream.socket.receive(io, reader.buffer[0..8]);
 
     switch (reader.buffer[0]) {
@@ -143,7 +142,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
     GlobalRootVisualId = @intCast(root_visual);
 
     // Create window
-    const window_id = getNextId();
+    const window: x.Window = @enumFromInt(getNextId());
 
     const width: u16 = 600;
     const height: u16 = 300;
@@ -152,40 +151,58 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
     const flag_count = 2;
     const request_length: u16 = 8 + flag_count;
 
-    @memset(send_buf[0..], 0);
-    send_buf[0] = X11_REQUEST_CREATE_WINDOW;
-    send_buf[1] = 0;
-    mem.writeInt(u16, send_buf[2..4], request_length, .little);
-    mem.writeInt(u32, send_buf[4..8], @bitCast(window_id), .little);
-    mem.writeInt(u32, send_buf[8..12], @bitCast(GlobalRootWindow), .little);
-    mem.writeInt(i16, send_buf[12..14], 100, .little);
-    mem.writeInt(i16, send_buf[14..16], 100, .little);
-    mem.writeInt(u16, send_buf[16..18], width, .little);
-    mem.writeInt(u16, send_buf[18..20], height, .little);
-    mem.writeInt(u16, send_buf[20..22], border_width, .little);
-    mem.writeInt(u16, send_buf[22..24], WINDOWCLASS_INPUTOUTPUT, .little);
-    mem.writeInt(u32, send_buf[24..28], @bitCast(GlobalRootVisualId), .little);
-    mem.writeInt(u32, send_buf[28..32], X11_FLAG_WIN_EVENT | X11_FLAG_BACKGROUND_PIXEL, .little);
-    mem.writeInt(u32, send_buf[32..36], 0xff000000, .little);
-    mem.writeInt(u32, send_buf[36..40], X11_EVENT_FLAG_EXPOSURE | X11_EVENT_FLAG_KEY_PRESS, .little);
+    try writer.writeStruct(@as(request.Header, request.Header{
+        .opcode = .create_window,
+        .length = request_length,
+    }), .little);
 
-    _ = try posix.write(sock, send_buf[0 .. request_length * 4]);
+    const CreateWindow = extern struct {
+        window: x.Window, // XID of new window
+        parent: x.Window, // root window or parent
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        border_width: u16,
+        class: u16, // InputOutput = 1, InputOnly = 2
+        visual_id: u32, // usually CopyFromParent
+        value_mask: u32, // bitmask for which optional fields to follow
+    };
+
+    const create_window: CreateWindow = .{
+        .window = window,
+        .parent = @enumFromInt(GlobalRootWindow),
+        .x = 100,
+        .y = 100,
+        .width = width,
+        .height = height,
+        .border_width = border_width,
+        .class = WINDOWCLASS_INPUTOUTPUT,
+        .visual_id = @bitCast(GlobalRootVisualId),
+        .value_mask = X11_FLAG_WIN_EVENT | X11_FLAG_BACKGROUND_PIXEL,
+    };
+    try writer.writeStruct(create_window, .little);
+
+    try writer.writeInt(u32, 0xffff0000, .little);
+    try writer.writeInt(u32, @bitCast(x.Window.EventMask{ .exposure = true, .key_press = true, .key_release = true, .focus_change = true, .button_press = true, .button_release = true }), .little);
+
+    try writer.flush();
 
     // Map window
-    @memset(send_buf[0..], 0);
-    send_buf[0] = X11_REQUEST_MAP_WINDOW;
-    mem.writeInt(u16, send_buf[2..4], 2, .little);
-    mem.writeInt(u32, send_buf[4..8], @bitCast(window_id), .little);
-    _ = try posix.write(sock, send_buf[0..8]);
+
+    try writer.writeStruct(@as(request.Header, request.Header{
+        .opcode = .map_window,
+        .length = 2,
+    }), .little);
+    try writer.writeInt(u32, @intFromEnum(window), .little);
+    try writer.flush();
 
     // Poll loop
-    var pfd = [_]posix.pollfd{
-        .{
-            .fd = sock,
-            .events = posix.POLL.IN,
-            .revents = 0,
-        },
-    };
+    var pfd = [_]posix.pollfd{.{
+        .fd = connection.stream.socket.handle,
+        .events = posix.POLL.IN,
+        .revents = 0,
+    }};
 
     while (true) {
         _ = try posix.poll(&pfd, -1);
@@ -199,6 +216,6 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
             break;
         }
 
-        try getAndProcessReply(sock);
+        try getAndProcessReply(connection.stream.socket.handle);
     }
 }

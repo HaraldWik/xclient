@@ -136,7 +136,6 @@ pub const window = struct {
     pub const Create = extern struct {
         header: Header = .{
             .opcode = .create_window,
-            .length = Header.len(@This()),
         },
         depth: u8 = 0, // usually CopyFromParent = 0
         pad0: [3]u8 = undefined, // 3 byte padding for alignment

@@ -1,9 +1,8 @@
 const std = @import("std");
-const request = @import("request.zig");
+
+pub const request = @import("request.zig");
 
 pub const auth = @import("auth.zig");
-
-pub const endian: std.builtin.Endian = .little;
 
 pub const Error = extern struct {
     type: u8 = 0, // always 0
@@ -29,7 +28,7 @@ pub const Connection = struct {
     pub const auth_protocol = "MIT-MAGIC-COOKIE-1";
 
     const Header = extern struct {
-        order: u8 = 'l',
+        order: u8 = 'l', // 'l' or 'B' aka little or big endian
         pad0: u8 = undefined,
         protocol_major: u16 = 11,
         protocol_minor: u16 = 0,
@@ -263,7 +262,7 @@ pub const Window = enum(ID.Tag) {
     pub fn create(
         window: @This(),
         writer: *std.Io.Writer,
-        depth: ?u8,
+        depth: u8, // 0 = copy from parent
         parent: Window,
         x: i16,
         y: i16,
@@ -276,7 +275,7 @@ pub const Window = enum(ID.Tag) {
         value_list: []const EventMask,
     ) !void {
         const create_window: request.window.Create = .{
-            .depth = depth orelse 0,
+            .depth = depth,
             .window = window,
             .parent = parent,
             .x = x,
@@ -289,18 +288,16 @@ pub const Window = enum(ID.Tag) {
             .value_mask = value_mask,
         };
 
-        try writer.writeStruct(create_window, endian);
-
-        for (value_list) |v| {
-            try writer.writeStruct(v, endian);
-        }
+        try writer.writeStruct(create_window, .little);
+        try writer.writeStruct(value_list, .little);
     }
 
     pub fn destroy(self: @This(), writer: *std.Io.Writer) void {
         const req: request.window.Destroy = .{
             .window = self,
         };
-        writer.writeStruct(req, endian) catch unreachable;
+        writer.writeStruct(req, .little) catch unreachable;
+        writer.flush() catch unreachable;
     }
 
     pub fn map(self: @This(), writer: *std.Io.Writer) !void {
@@ -308,6 +305,7 @@ pub const Window = enum(ID.Tag) {
             .window = self,
         };
         try writer.writeStruct(req, .little);
+        try writer.flush();
     }
 };
 
