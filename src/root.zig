@@ -304,6 +304,7 @@ pub const Setup = struct {
         pad0: u8,
     };
 
+    // TODO: fix this, this function is **very** unstable
     pub fn get(reader: *std.Io.Reader) !@This() {
         // _ = try connection.stream.socket.receive(connection.io, reader.buffer[0..8]);
         try reader.fillMore();
@@ -329,7 +330,7 @@ pub const Setup = struct {
         // const server_info = try reader.takeStruct(ServerInfo, .little);
 
         const vendor_pad = (4 - (server_info.vendor_len % 4)) % 4;
-        const formats_len = 8 * server_info.num_formats;
+        const formats_len = 8 *| server_info.num_formats;
         const screens_offset = 40 + server_info.vendor_len + vendor_pad + formats_len;
         reader.seek += screens_offset;
         // const root = try reader.takeStruct(Screen, .little);
