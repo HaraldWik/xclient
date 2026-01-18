@@ -35,27 +35,6 @@ var GlobalIdMask: u32 = 0;
 var GlobalRootWindow: u32 = 0;
 var GlobalRootVisualId: u32 = 0;
 
-// PAD macro
-fn pad(n: usize) usize {
-    return (4 - (n % 4)) % 4;
-}
-
-fn verifyOrDie(ok: bool, msg: []const u8) noreturn {
-    if (!ok) {
-        std.debug.print("{s}\n", .{msg});
-        std.process.exit(13);
-    }
-    unreachable;
-}
-
-fn verifyOrDieErrno(ok: bool, msg: []const u8) noreturn {
-    if (!ok) {
-        std.debug.print("{s}: {}\n", .{ msg, std.posix.errno() });
-        std.process.exit(13);
-    }
-    unreachable;
-}
-
 fn getNextId() u32 {
     const result = (GlobalIdMask & GlobalId) | GlobalIdBase;
     GlobalId += 1;
@@ -96,7 +75,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const io = threaded.io();
 
     const connection: x.Connection = try .initExplicit(io, x.Connection.default_display_path, null);
-    defer connection.close(io);
+    defer connection.close();
 
     var read_buf: [READ_BUFFER_SIZE]u8 = undefined;
     var stream_reader = connection.stream.reader(io, &read_buf);
@@ -129,7 +108,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const vendor_len = mem.readInt(u16, read_buf[24..26], .little);
     const num_formats = read_buf[29];
 
-    const vendor_pad = pad(vendor_len);
+    const vendor_pad = (4 - (vendor_len % 4)) % 4;
     const formats_len = 8 * num_formats;
     const screens_offset = 40 + vendor_len + vendor_pad + formats_len;
 
@@ -151,25 +130,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const flag_count = 2;
     const request_length: u16 = 8 + flag_count;
 
-    try writer.writeStruct(@as(request.Header, request.Header{
-        .opcode = .create_window,
-        .length = request_length,
-    }), .little);
-
-    const CreateWindow = extern struct {
-        window: x.Window, // XID of new window
-        parent: x.Window, // root window or parent
-        x: i16,
-        y: i16,
-        width: u16,
-        height: u16,
-        border_width: u16,
-        class: u16, // InputOutput = 1, InputOnly = 2
-        visual_id: u32, // usually CopyFromParent
-        value_mask: u32, // bitmask for which optional fields to follow
-    };
-
-    const create_window: CreateWindow = .{
+    const req: x.Window.Create = .{
+        .header = .{ .opcode = .create_window, .length = request_length },
         .window = window,
         .parent = @enumFromInt(GlobalRootWindow),
         .x = 100,
@@ -179,22 +141,15 @@ pub fn main(init: std.process.Init.Minimal) !void {
         .border_width = border_width,
         .class = WINDOWCLASS_INPUTOUTPUT,
         .visual_id = @bitCast(GlobalRootVisualId),
-        .value_mask = X11_FLAG_WIN_EVENT | X11_FLAG_BACKGROUND_PIXEL,
+        .value_mask = .{ .event_mask = true, .background_pixel = true },
     };
-    try writer.writeStruct(create_window, .little);
+
+    try writer.writeStruct(req, .little);
 
     try writer.writeInt(u32, 0xffff0000, .little);
-    try writer.writeInt(u32, @bitCast(x.Window.EventMask{ .exposure = true, .key_press = true, .key_release = true, .focus_change = true, .button_press = true, .button_release = true }), .little);
+    try writer.writeInt(u32, @bitCast(x.Event.Mask{ .exposure = true, .key_press = true, .key_release = true, .focus_change = true, .button_press = true, .button_release = true }), .little);
 
-    try writer.flush();
-
-    // Map window
-
-    try writer.writeStruct(@as(request.Header, request.Header{
-        .opcode = .map_window,
-        .length = 2,
-    }), .little);
-    try writer.writeInt(u32, @intFromEnum(window), .little);
+    try window.map(writer);
     try writer.flush();
 
     // Poll loop

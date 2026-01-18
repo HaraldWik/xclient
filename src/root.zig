@@ -22,6 +22,7 @@ pub const ID = enum(Tag) {
 };
 
 pub const Connection = struct {
+    io: std.Io,
     stream: std.Io.net.Stream,
 
     pub const default_display_path = "/tmp/.X11-unix/X0";
@@ -73,11 +74,11 @@ pub const Connection = struct {
 
         try writer.flush();
 
-        return .{ .stream = stream };
+        return .{ .io = io, .stream = stream };
     }
 
-    pub fn close(self: @This(), io: std.Io) void {
-        self.stream.close(io);
+    pub fn close(self: @This()) void {
+        self.stream.close(self.io);
     }
 
     // TODO: clean this mess up
@@ -227,176 +228,5 @@ pub const Screen = extern struct {
     num_depths: u8,
 };
 
-pub const Window = enum(ID.Tag) {
-    _,
-
-    pub const EventMask = packed struct(u32) {
-        key_press: bool = false,
-        key_release: bool = false,
-        button_press: bool = false,
-        button_release: bool = false,
-        enter_window: bool = false,
-        leave_window: bool = false,
-        pointer_motion: bool = false,
-        pointer_motion_hint: bool = false,
-        button_1_motion: bool = false,
-        button_2_motion: bool = false,
-        button_3_motion: bool = false,
-        button_4_motion: bool = false,
-        button_5_motion: bool = false,
-        button_motion: bool = false,
-        keymap_state: bool = false,
-        exposure: bool = false,
-        visibility_change: bool = false,
-        structure_notify: bool = false,
-        resize_redirect: bool = false,
-        substructure_notify: bool = false,
-        substructure_redirect: bool = false,
-        focus_change: bool = false,
-        property_change: bool = false,
-        colormap_change: bool = false,
-        owner_grab_button: bool = false,
-        pad0: u7 = 0,
-    };
-
-    pub fn create(
-        window: @This(),
-        writer: *std.Io.Writer,
-        depth: u8, // 0 = copy from parent
-        parent: Window,
-        x: i16,
-        y: i16,
-        width: u16,
-        height: u16,
-        border_width: u16,
-        class: request.window.Create.Class,
-        visual: VisualID,
-        value_mask: request.window.Create.ValueMask,
-        value_list: []const EventMask,
-    ) !void {
-        const create_window: request.window.Create = .{
-            .depth = depth,
-            .window = window,
-            .parent = parent,
-            .x = x,
-            .y = y,
-            .width = width,
-            .height = height,
-            .border_width = border_width,
-            .class = class,
-            .visual = visual,
-            .value_mask = value_mask,
-        };
-
-        try writer.writeStruct(create_window, .little);
-        try writer.writeStruct(value_list, .little);
-    }
-
-    pub fn destroy(self: @This(), writer: *std.Io.Writer) void {
-        const req: request.window.Destroy = .{
-            .window = self,
-        };
-        writer.writeStruct(req, .little) catch unreachable;
-        writer.flush() catch unreachable;
-    }
-
-    pub fn map(self: @This(), writer: *std.Io.Writer) !void {
-        const req: request.window.Map = .{
-            .window = self,
-        };
-        try writer.writeStruct(req, .little);
-        try writer.flush();
-    }
-};
-
-pub const Event = extern struct {
-    type: Type,
-    event: extern union {
-        key: Key,
-        expose: Expose,
-    },
-    // add others here
-
-    pub const Header = packed struct {
-        type: u8, // Event type, e.g., KeyPress = 2
-        pad0: u8 = undefined,
-        sequence: u16, // sequence number from X server
-    };
-
-    pub const Type = enum(u8) {
-        key_press = 2,
-        key_release = 3,
-        button_press = 4,
-        button_release = 5,
-        motion_notify = 6,
-        enter_notify = 7,
-        leave_notify = 8,
-        focus_in = 9,
-        focus_out = 10,
-        keymap_notify = 11,
-        expose = 12,
-        graphics_expose = 13,
-        no_expose = 14,
-        visibility_notify = 15,
-        create_notify = 16,
-        destroy_notify = 17,
-        unmap_notify = 18,
-        map_notify = 19,
-        map_request = 20,
-        reparent_notify = 21,
-        configure_notify = 22,
-        configure_request = 23,
-        gravity_notify = 24,
-        resize_request = 25,
-        circulate_notify = 26,
-        circulate_request = 27,
-        property_notify = 28,
-        selection_clear = 29,
-        selection_request = 30,
-        selection_notify = 31,
-        colormap_notify = 32,
-        client_message = 33,
-        mapping_notify = 34,
-        // 35–127 are unused/reserved
-        _,
-    };
-
-    pub const GravityNotify = packed struct {
-        header: Event.Header,
-        event: Window,
-        window: Window,
-        x: i16,
-        y: i16,
-        width: u16,
-        height: u16,
-        x_root: i16,
-        y_root: i16,
-        pad0: u16, // to make 32 bytes
-    };
-
-    pub const Key = extern struct {
-        header: Header,
-        window: u32,
-        root: u32,
-        subwindow: u32,
-        time: u32,
-        x: i16,
-        y: i16,
-        x_root: i16,
-        y_root: i16,
-        state: u16,
-        keycode: u8,
-        same_screen: u8,
-    };
-
-    pub const Expose = extern struct {
-        header: Header,
-        window: Window,
-        x: i16,
-        y: i16,
-        width: u16,
-        height: u16,
-        count: u16,
-        pad0: u16,
-    };
-};
+pub const Window = request.Window;
+pub const Event = request.Event;

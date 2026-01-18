@@ -1,4 +1,10 @@
+const std = @import("std");
 const root = @import("root.zig");
+
+pub const ID = enum(Tag) {
+    _,
+    pub const Tag = u32;
+};
 
 pub const Opcode = enum(u8) {
     create_window = 1,
@@ -132,24 +138,24 @@ pub const Header = extern struct {
     }
 };
 
-pub const window = struct {
+pub const Window = enum(ID.Tag) {
+    _,
+
     pub const Create = extern struct {
         header: Header = .{
             .opcode = .create_window,
+            .length = 40,
         },
-        depth: u8 = 0, // usually CopyFromParent = 0
-        pad0: [3]u8 = undefined, // 3 byte padding for alignment
-        window: root.Window, // XID of the window you’re creating
-        parent: root.Window, // root window ID
+        window: Window, // XID of new window
+        parent: Window, // root window or parent
         x: i16,
         y: i16,
         width: u16,
         height: u16,
         border_width: u16,
-        class: Class = .input_output, // InputOutput = 1
-        visual: root.VisualID, // usually CopyFromParent = 0
-        value_mask: ValueMask, // which optional values you’re setting
-        // value_list follows if value_mask != 0
+        class: u16, // InputOutput = 1, InputOnly = 2
+        visual_id: u32, // usually CopyFromParent
+        value_mask: ValueMask, // bitmask for which optional fields to follow
 
         pub const Class = enum(u16) {
             input_output = 1,
@@ -157,17 +163,23 @@ pub const window = struct {
         };
 
         pub const ValueMask = packed struct(u32) {
-            background_pixel: bool = false,
-            border_pixel: bool = false,
-            bit_gravity: bool = false,
-            win_gravity: bool = false,
-            backing_store: bool = false,
-            backing_planes: bool = false,
-            backing_pixel: bool = false,
-            override_redirect: bool = false,
-            colormap: bool = false,
-            event_mask: bool = false,
-            pad0: u22 = 0,
+            background_pixmap: bool = false, // bit 0
+            background_pixel: bool = false, // bit 1
+            border_pixmap: bool = false, // bit 2
+            border_pixel: bool = false, // bit 3
+            bit_gravity: bool = false, // bit 4
+            win_gravity: bool = false, // bit 5
+            backing_store: bool = false, // bit 6
+            backing_planes: bool = false, // bit 7
+            backing_pixel: bool = false, // bit 8
+            override_redirect: bool = false, // bit 9
+            save_under: bool = false, // bit 10
+            event_mask: bool = false, // bit 11
+            do_not_propagate_mask: bool = false, // bit 12
+            colormap: bool = false, // bit 13
+            cursor: bool = false, // bit 14
+
+            pad0: u17 = 0, // bits 15–31
 
             pub const empty: @This() = .{};
         };
@@ -184,8 +196,135 @@ pub const window = struct {
     pub const Map = extern struct {
         header: Header = .{
             .opcode = .map_window,
-            .length = Header.len(@This()),
+            .length = 2,
         },
         window: root.Window,
+    };
+
+    pub fn create(self: @This(), writer: *std.Io.Writer) !@This() {
+        _ = self;
+        _ = writer;
+        return @enumFromInt(0);
+    }
+
+    pub fn destroy(self: @This(), writer: *std.Io.Writer) void {
+        const req: Destroy = .{
+            .window = self,
+        };
+        writer.writeStruct(req, .little) catch unreachable;
+        writer.flush() catch unreachable;
+    }
+
+    pub fn map(self: @This(), writer: *std.Io.Writer) !void {
+        const req: Map = .{ .window = self };
+        try writer.writeStruct(req, .little);
+    }
+};
+
+pub const Event = struct {
+    pub const Mask = packed struct(u32) {
+        key_press: bool = false,
+        key_release: bool = false,
+        button_press: bool = false,
+        button_release: bool = false,
+        enter_window: bool = false,
+        leave_window: bool = false,
+        pointer_motion: bool = false,
+        pointer_motion_hint: bool = false,
+        button_1_motion: bool = false,
+        button_2_motion: bool = false,
+        button_3_motion: bool = false,
+        button_4_motion: bool = false,
+        button_5_motion: bool = false,
+        button_motion: bool = false,
+        keymap_state: bool = false,
+        exposure: bool = false,
+        visibility_change: bool = false,
+        structure_notify: bool = false,
+        resize_redirect: bool = false,
+        substructure_notify: bool = false,
+        substructure_redirect: bool = false,
+        focus_change: bool = false,
+        property_change: bool = false,
+        colormap_change: bool = false,
+        owner_grab_button: bool = false,
+        pad0: u7 = 0,
+    };
+
+    pub const Type = enum(u8) {
+        key_press = 2,
+        key_release = 3,
+        button_press = 4,
+        button_release = 5,
+        motion_notify = 6,
+        enter_notify = 7,
+        leave_notify = 8,
+        focus_in = 9,
+        focus_out = 10,
+        keymap_notify = 11,
+        expose = 12,
+        graphics_expose = 13,
+        no_expose = 14,
+        visibility_notify = 15,
+        create_notify = 16,
+        destroy_notify = 17,
+        unmap_notify = 18,
+        map_notify = 19,
+        map_request = 20,
+        reparent_notify = 21,
+        configure_notify = 22,
+        configure_request = 23,
+        gravity_notify = 24,
+        resize_request = 25,
+        circulate_notify = 26,
+        circulate_request = 27,
+        property_notify = 28,
+        selection_clear = 29,
+        selection_request = 30,
+        selection_notify = 31,
+        colormap_notify = 32,
+        client_message = 33,
+        mapping_notify = 34,
+        // 35–127 are unused/reserved
+        _,
+    };
+
+    pub const GravityNotify = packed struct {
+        header: Event.Header,
+        event: Window,
+        window: Window,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        x_root: i16,
+        y_root: i16,
+        pad0: u16, // to make 32 bytes
+    };
+
+    pub const Key = extern struct {
+        header: Header,
+        window: u32,
+        root: u32,
+        subwindow: u32,
+        time: u32,
+        x: i16,
+        y: i16,
+        x_root: i16,
+        y_root: i16,
+        state: u16,
+        keycode: u8,
+        same_screen: u8,
+    };
+
+    pub const Expose = extern struct {
+        header: Header,
+        window: Window,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        count: u16,
+        pad0: u16,
     };
 };
