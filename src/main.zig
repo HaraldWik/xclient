@@ -1,34 +1,10 @@
 const std = @import("std");
 const x = @import("xclient");
-const request = x.request;
 const posix = std.posix;
 const mem = std.mem;
 
 const READ_BUFFER_SIZE = 16 * 1024;
 
-// X11 response states
-const RESPONSE_STATE_FAILED = 0;
-const RESPONSE_STATE_SUCCESS = 1;
-const RESPONSE_STATE_AUTHENTICATE = 2;
-
-// X11 opcodes
-const X11_REQUEST_MAP_WINDOW = 8;
-
-// Event flags
-const X11_EVENT_FLAG_KEY_PRESS = 0x00000001;
-const X11_EVENT_FLAG_KEY_RELEASE = 0x00000002;
-const X11_EVENT_FLAG_EXPOSURE = 0x8000;
-
-// Window flags
-const X11_FLAG_BACKGROUND_PIXEL = 0x00000002;
-const X11_FLAG_WIN_EVENT = 0x00000800;
-
-// Window classes
-const WINDOWCLASS_COPYFROMPARENT = 0;
-const WINDOWCLASS_INPUTOUTPUT = 1;
-const WINDOWCLASS_INPUTONLY = 2;
-
-// Globals (same as C)
 var GlobalId: u32 = 0;
 var GlobalIdBase: u32 = 0;
 var GlobalIdMask: u32 = 0;
@@ -40,35 +16,10 @@ fn getNextId() u32 {
     return result;
 }
 
-fn printResponseError(buf: []const u8) void {
-    const code = buf[1];
-    std.debug.print("\x1b[31mResponse Error: [{d}]\x1b[0m\n", .{code});
-}
-
-fn printAndProcessEvent(buf: []const u8) void {
-    std.debug.print("Some event occurred: {t}\n", .{@as(x.Event.Type, @enumFromInt(buf[0]))});
-}
-
-fn getAndProcessReply(fd: posix.fd_t) !void {
-    var buffer: [1024]u8 = undefined;
-    const bytes_read = try posix.read(fd, &buffer);
-    if (bytes_read == 0) return;
-
-    const code = buffer[0];
-    if (code == 0) {
-        printResponseError(buffer[0..bytes_read]);
-    } else if (code == 1) {
-        std.debug.print("---- Unexpected reply\n", .{});
-    } else {
-        printAndProcessEvent(buffer[0..bytes_read]);
-    }
-}
-
 // xhost +local: / xhost -local:
 
 pub fn main(init: std.process.Init.Minimal) !void {
     _ = init;
-    // Create socket
     var threaded: std.Io.Threaded = .init_single_threaded;
     defer threaded.deinit();
     const io = threaded.io();
@@ -88,15 +39,15 @@ pub fn main(init: std.process.Init.Minimal) !void {
     _ = try connection.stream.socket.receive(io, reader.buffer[0..8]);
 
     switch (reader.buffer[0]) {
-        RESPONSE_STATE_FAILED => {
+        0 => {
             std.debug.print("X11 init failed\n", .{});
             return;
         },
-        RESPONSE_STATE_AUTHENTICATE => {
+        2 => {
             std.debug.print("Authentication required.\nRun: xhost +local:\n", .{});
             return;
         },
-        RESPONSE_STATE_SUCCESS => {},
+        1 => {},
         else => return,
     }
 
@@ -128,25 +79,19 @@ pub fn main(init: std.process.Init.Minimal) !void {
     try window.map(writer);
     try writer.flush();
 
-    // Poll loop
-    var pfd = [_]posix.pollfd{.{
-        .fd = connection.stream.socket.handle,
-        .events = posix.POLL.IN,
-        .revents = 0,
-    }};
-
-    while (true) {
-        _ = try posix.poll(&pfd, -1);
-
-        if ((pfd[0].revents & posix.POLL.ERR) != 0) {
-            std.debug.print("---- Poll error\n", .{});
-        }
-
-        if ((pfd[0].revents & posix.POLL.HUP) != 0) {
-            std.debug.print("---- Connection closed\n", .{});
-            break;
-        }
-
-        try getAndProcessReply(connection.stream.socket.handle);
+    main_loop: while (true) {
+        while (try x.Event.next(connection, reader)) |event| switch (event) {
+            .close => {
+                std.log.info("close", .{});
+                break :main_loop;
+            },
+            .expose => |expose| std.log.info("resize: {d}x{d}", .{ expose.width, expose.height }),
+            .key_press => |key| {
+                const keycode = key.header.detail; // This is the hardware key, so its diffrent on diffrent platforms
+                std.log.info("pressed key: ({c}) {d}", .{ if (std.ascii.isAlphanumeric(keycode)) keycode else '?', keycode });
+            },
+            .key_release => {},
+            else => |event_type| std.log.info("{t}", .{event_type}),
+        };
     }
 }
