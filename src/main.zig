@@ -33,7 +33,6 @@ var GlobalId: u32 = 0;
 var GlobalIdBase: u32 = 0;
 var GlobalIdMask: u32 = 0;
 var GlobalRootWindow: u32 = 0;
-var GlobalRootVisualId: u32 = 0;
 
 fn getNextId() u32 {
     const result = (GlobalIdMask & GlobalId) | GlobalIdBase;
@@ -112,43 +111,20 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const formats_len = 8 * num_formats;
     const screens_offset = 40 + vendor_len + vendor_pad + formats_len;
 
-    const root_window = mem.readInt(u32, read_buf[screens_offset .. screens_offset + 4][0..4], .little);
-    const root_visual = mem.readInt(u32, read_buf[screens_offset + 32 .. screens_offset + 36][0..4], .little);
+    const root_window: x.Window = @enumFromInt(mem.readInt(u32, read_buf[screens_offset .. screens_offset + 4][0..4], .little));
+    const root_visual: x.VisualID = @enumFromInt(mem.readInt(u32, read_buf[screens_offset + 32 .. screens_offset + 36][0..4], .little));
 
     GlobalIdBase = @intCast(resource_base);
     GlobalIdMask = @intCast(resource_mask);
-    GlobalRootWindow = @intCast(root_window);
-    GlobalRootVisualId = @intCast(root_visual);
 
-    // Create window
     const window: x.Window = @enumFromInt(getNextId());
-
-    const width: u16 = 600;
-    const height: u16 = 300;
-    const border_width: u16 = 1;
-
-    const flag_count = 2;
-    const request_length: u16 = 8 + flag_count;
-
-    const req: x.Window.Create = .{
-        .header = .{ .opcode = .create_window, .length = request_length },
-        .window = window,
-        .parent = @enumFromInt(GlobalRootWindow),
-        .x = 100,
-        .y = 100,
-        .width = width,
-        .height = height,
-        .border_width = border_width,
-        .class = WINDOWCLASS_INPUTOUTPUT,
-        .visual_id = @bitCast(GlobalRootVisualId),
-        .value_mask = .{ .event_mask = true, .background_pixel = true },
-    };
-
-    try writer.writeStruct(req, .little);
-
-    try writer.writeInt(u32, 0xffff0000, .little);
-    try writer.writeInt(u32, @bitCast(x.Event.Mask{ .exposure = true, .key_press = true, .key_release = true, .focus_change = true, .button_press = true, .button_release = true }), .little);
-
+    try window.create(writer, .{
+        .parent = root_window,
+        .width = 600,
+        .height = 300,
+        .border_width = 1,
+        .visual_id = root_visual,
+    });
     try window.map(writer);
     try writer.flush();
 
