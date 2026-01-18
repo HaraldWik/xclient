@@ -1,5 +1,4 @@
 const std = @import("std");
-const root = @import("root.zig");
 
 pub const request = struct {
     pub const Opcode = enum(u8) {
@@ -129,9 +128,8 @@ pub const request = struct {
         detail: u8 = 0, // usually 0
         length: u16, // total length of request in 4-byte units
 
-        // NOTE: this does not work on all headers
-        pub fn len(comptime T: type) comptime_int {
-            return @sizeOf(T) / 4;
+        pub fn getLength(comptime T: type) comptime_int {
+            return @sizeOf(@This()) - @sizeOf(T);
         }
     };
 };
@@ -149,7 +147,7 @@ pub const Connection = struct {
     pub const default_display_path = "/tmp/.X11-unix/X0";
     pub const auth_protocol = "MIT-MAGIC-COOKIE-1";
 
-    pub const InitHeader = extern struct {
+    pub const Header = extern struct {
         order: u8 = 'l', // 'l' or 'B' aka little or big endian
         pad0: u8 = undefined,
         protocol_major: u16 = 11,
@@ -169,7 +167,7 @@ pub const Connection = struct {
         const address: std.Io.net.UnixAddress = try .init(display_path);
         const stream = try address.connect(io);
 
-        var stream_writer_buffer: [@sizeOf(InitHeader)]u8 = undefined;
+        var stream_writer_buffer: [@sizeOf(Header)]u8 = undefined;
         var stream_writer = stream.writer(io, &stream_writer_buffer);
         const writer = &stream_writer.interface;
 
@@ -178,7 +176,7 @@ pub const Connection = struct {
             const cookie_len = try findCookie(io, xauthority.?, &cookie_buffer);
             const cookie = cookie_buffer[0..cookie_len];
 
-            const header: InitHeader = .{
+            const header: Header = .{
                 .auth_name_len = @intCast(auth_protocol.len),
                 .auth_data_len = @intCast(cookie.len),
             };
@@ -189,7 +187,7 @@ pub const Connection = struct {
             try writer.writeAll(cookie[0..cookie_len]);
             writer.end += (4 - (writer.end % 4)) % 4; // Padding
         } else {
-            const header: InitHeader = .{};
+            const header: Header = .{};
             try writer.writeStruct(header, .little);
         }
 
@@ -268,29 +266,32 @@ pub const VisualID = enum(ID.Tag) {
 };
 
 pub const Setup = struct {
-    resource_counter: usize = 0,
-    header: StatusHeader,
-    server_info: Info,
-    keyboard_info: KeyboardInfo,
-    /// Will be undefineed after reader.tossBuffered();
-    vendor: []const u8,
-    // later: formats: []PixmapFormat
-    // later: roots: []Screen
-    root_screen: Screen,
+    resource_count: u32 = 0,
+    resource_base: u32,
+    resource_mask: u32,
+    root: Screen,
 
     pub const StatusHeader = extern struct {
-        status: u8,
+        status: Status,
         pad0: u8,
         protocol_major: u16,
         protocol_minor: u16,
         length: u16, // in 4-byte units
+
+        pub const Status = enum(u8) {
+            success = 1,
+            failure = 0,
+            authenticate = 2,
+        };
     };
 
-    pub const Info = extern struct {
-        release_number: u32,
-        resource_id_base: u32,
-        resource_id_mask: u32,
-        motion_buffer_size: u32,
+    pub const ServerInfo = extern struct {
+        resource_base: u32,
+        resource_mask: u32,
+        pad0: u32 = undefined,
+        vendor_len: u16,
+        pad1: [3]u8 = undefined,
+        num_formats: u8,
     };
 
     pub const KeyboardInfo = extern struct {
@@ -304,29 +305,72 @@ pub const Setup = struct {
     };
 
     pub fn get(reader: *std.Io.Reader) !@This() {
+        // _ = try connection.stream.socket.receive(connection.io, reader.buffer[0..8]);
+        try reader.fillMore();
+        defer reader.tossBuffered();
         const header = try reader.takeStruct(StatusHeader, .little);
-        const server_info = try reader.takeStruct(Info, .little);
-        const keyboard_info = try reader.takeStruct(KeyboardInfo, .little);
 
-        const vendor_offset = 6;
-        const vendor = (try reader.take(keyboard_info.vendor_len + vendor_offset))[vendor_offset..];
-        try reader.fill((4 - (vendor.len % 4)) % 4);
+        switch (header.status) {
+            .success => {},
+            .failure => return error.Failure,
+            .authenticate => {
+                std.log.info("Authentication required. Run: xhost +local:", .{});
+                return error.Authentication;
+            },
+        }
 
-        const root_screen = try reader.takeStruct(Screen, .little);
+        const server_info: ServerInfo = .{
+            .resource_base = std.mem.readInt(u32, reader.buffer[12..16], .little),
+            .resource_mask = std.mem.readInt(u32, reader.buffer[16..20], .little),
+            .vendor_len = std.mem.readInt(u16, reader.buffer[24..26], .little),
+            .num_formats = reader.buffer[29],
+        };
+        // reader.toss(4);
+        // const server_info = try reader.takeStruct(ServerInfo, .little);
+
+        const vendor_pad = (4 - (server_info.vendor_len % 4)) % 4;
+        const formats_len = 8 * server_info.num_formats;
+        const screens_offset = 40 + server_info.vendor_len + vendor_pad + formats_len;
+        reader.seek += screens_offset;
+        // const root = try reader.takeStruct(Screen, .little);
+
+        const root_window: Window = @enumFromInt(std.mem.readInt(u32, reader.buffer[screens_offset .. screens_offset + 4][0..4], .little));
+        const root_visual: VisualID = @enumFromInt(std.mem.readInt(u32, reader.buffer[screens_offset + 32 .. screens_offset + 36][0..4], .little));
+        var root: Screen = std.mem.zeroes(Screen);
+        root.window = root_window;
+        root.visual_id = root_visual;
 
         return .{
-            .header = header,
-            .server_info = server_info,
-            .keyboard_info = keyboard_info,
-            .vendor = vendor,
-            .root_screen = root_screen,
+            .resource_base = server_info.resource_base,
+            .resource_mask = server_info.resource_mask,
+            .root = root,
         };
     }
 
+    // pub fn get(reader: *std.Io.Reader) !@This() {
+    //     const header = try reader.takeStruct(StatusHeader, .little);
+    //     const server_info = try reader.takeStruct(Info, .little);
+    //     const keyboard_info = try reader.takeStruct(KeyboardInfo, .little);
+
+    //     const vendor_offset = 6;
+    //     const vendor = (try reader.take(keyboard_info.vendor_len + vendor_offset))[vendor_offset..];
+    //     try reader.fill((4 - (vendor.len % 4)) % 4);
+
+    //     const root_screen = try reader.takeStruct(Screen, .little);
+
+    //     return .{
+    //         .header = header,
+    //         .server_info = server_info,
+    //         .keyboard_info = keyboard_info,
+    //         .vendor = vendor,
+    //         .root_screen = root_screen,
+    //     };
+    // }
+
     pub fn nextId(self: *@This(), comptime T: type) T {
         if (@typeInfo(T).@"enum".tag_type != ID.Tag) @compileError("invalid type given to nextId");
-        const id = self.server_info.resource_id_base | (self.resource_counter & self.server_info.resource_id_mask);
-        self.resource_counter += 1;
+        const id = self.resource_base | (self.resource_count & self.resource_mask);
+        self.resource_count += 1;
         return @enumFromInt(id);
     }
 };
@@ -343,7 +387,7 @@ pub const Screen = extern struct {
     mm_height: u16,
     min_installed_maps: u16,
     max_installed_maps: u16,
-    root_visual_id: VisualID,
+    visual_id: VisualID,
     backing_stores: u8,
     save_unders: u8,
     root_depth: u8,
@@ -401,7 +445,7 @@ pub const Window = enum(ID.Tag) {
             .opcode = .destroy_window,
             .length = 2,
         },
-        window: root.Window,
+        window: Window,
     };
 
     pub const Map = extern struct {
@@ -409,7 +453,7 @@ pub const Window = enum(ID.Tag) {
             .opcode = .map_window,
             .length = 2,
         },
-        window: root.Window,
+        window: Window,
     };
 
     pub const Config = struct {
