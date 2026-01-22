@@ -4,6 +4,9 @@ const Connection = @import("root.zig").Connection;
 
 const name = "MIT-MAGIC-COOKIE-1";
 
+// #define AUTH_PROTO_XDM_AUTHORIZATION "XDM-AUTHORIZATION-1"
+// #define AUTH_PROTO_MIT_MAGIC_COOKIE "MIT-MAGIC-COOKIE-1"
+
 // The header must be 12 bytes
 pub const Header = packed struct {
     order: u8 = switch (endian) {

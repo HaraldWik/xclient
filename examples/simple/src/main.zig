@@ -20,18 +20,22 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var stream_writer = connection.stream.writer(io, &stream_writer_buffer);
     const writer = &stream_writer.interface;
 
-    var setup: x.Setup = try .get(reader);
+    var setup, const root = try x.Setup.read(reader);
 
     const window: x.Window = setup.nextId(x.Window);
     try window.create(writer, .{
-        .parent = setup.root.window,
+        .parent = root.window,
         .width = 600,
         .height = 300,
         .border_width = 1,
-        .visual_id = setup.root.visual_id,
+        .visual_id = root.visual_id,
     });
+
     try window.map(writer);
     try writer.flush();
+
+    // const utf8_string_atom: x.Atom = try .getInternal(reader, writer, "UTF8_STRING", false);
+    // try window.changeProperty(writer, .replace, .wm_name, utf8_string_atom, .@"8", "Title");
 
     main_loop: while (true) {
         while (try x.Event.next(connection, reader)) |event| switch (event) {

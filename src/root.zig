@@ -1,5 +1,11 @@
 const std = @import("std");
 
+pub const Status = enum(u8) {
+    success = 1,
+    failure = 0,
+    authenticate = 2,
+};
+
 pub const request = struct {
     pub const Opcode = enum(u8) {
         create_window = 1,
@@ -135,14 +141,119 @@ pub const request = struct {
 };
 
 pub const Atom = enum(u32) {
-    protocols = 0x1234,
-    delete_window = 0x1235,
+    invalid = 0,
+    primary = 1,
+    secondary = 2,
+    arc = 3,
+    atom = 4,
+    bitmap = 5,
+    cardinal = 6,
+    colormap = 7,
+    cursor = 8,
+    cut_buffer0 = 9,
+    cut_buffer1 = 10,
+    cut_buffer2 = 11,
+    cut_buffer3 = 12,
+    cut_buffer4 = 13,
+    cut_buffer5 = 14,
+    cut_buffer6 = 15,
+    cut_buffer7 = 16,
+    drawable = 17,
+    font = 18,
+    integer = 19,
+    pixmap = 20,
+    point = 21,
+    rectangle = 22,
+    resource_manager = 23,
+    rgb_color_map = 24,
+    rgb_best_map = 25,
+    rgb_blue_map = 26,
+    rgb_default_map = 27,
+    rgb_gray_map = 28,
+    rgb_green_map = 29,
+    rgb_red_map = 30,
+    string = 31,
+    visualid = 32,
+    window = 33,
+    wm_command = 34,
+    wm_hints = 35,
+    wm_client_machine = 36,
+    wm_icon_name = 37,
+    wm_icon_size = 38,
+    wm_name = 39,
+    wm_normal_hints = 40,
+    wm_size_hints = 41,
+    wm_zoom_hints = 42,
+    min_space = 43,
+    norm_space = 44,
+    max_space = 45,
+    end_space = 46,
+    superscript_x = 47,
+    superscript_y = 48,
+    subscript_x = 49,
+    subscript_y = 50,
+    underline_position = 51,
+    underline_thickness = 52,
+    strikeout_ascent = 53,
+    strikeout_descent = 54,
+    italic_angle = 55,
+    x_height = 56,
+    quad_width = 57,
+    weight = 58,
+    point_size = 59,
+    resolution = 60,
+    copyright = 61,
+    notice = 62,
+    font_name = 63,
+    family_name = 64,
+    full_name = 65,
+    cap_height = 66,
+    wm_class = 67,
+    wm_transient_for = 68,
     _,
+
+    pub const GetInternal = extern struct {
+        header: request.Header,
+        name_len: u16,
+        pad0: u16 = undefined,
+
+        pub const Response = extern struct {
+            status: Status, // must be 1
+            pad0: u8 = undefined,
+            sequence: u16,
+            length: u32, // always 0
+            atom: Atom,
+            pad1: [20]u8 = undefined,
+        };
+    };
+
+    pub fn getInternal(reader: *std.Io.Reader, writer: *std.Io.Writer, name: []const u8, only_if_exists: bool) !@This() {
+        const padded_name_len = (name.len + 3) & ~@as(usize, 3);
+        const get_internal: GetInternal = .{
+            .header = .{
+                .opcode = .intern_atom,
+                .detail = @intFromBool(only_if_exists),
+                .length = @intCast(8 + padded_name_len),
+            },
+            .name_len = @intCast(name.len),
+        };
+        try writer.writeStruct(get_internal, .little);
+        try writer.writeAll(name);
+        try writer.splatByteAll(0, (4 - (name.len % 4)) % 4);
+        try writer.flush();
+
+        const response = try reader.takeStruct(GetInternal.Response, .little);
+        std.debug.print("{d}\n", .{response.status});
+        if (response.status != .success) return error.ResponseStatus;
+        if (response.atom == .invalid) return error.InvalidAtomFound;
+        return response.atom;
+    }
 };
 
 pub const Connection = struct {
     io: std.Io,
     stream: std.Io.net.Stream,
+    setup: Setup = undefined,
 
     pub const default_display_path = "/tmp/.X11-unix/X0";
     pub const auth_protocol = "MIT-MAGIC-COOKIE-1";
@@ -265,113 +376,54 @@ pub const VisualID = enum(ID.Tag) {
     _,
 };
 
-pub const Setup = struct {
-    resource_count: u32 = 0,
+pub const Setup = extern struct {
+    // 8-byte header
+    status: u8,
+    pad0: u8,
+    protocol_major: u16,
+    protocol_minor: u16,
+    length: u16,
+
+    // 40-byte setup info
+    release_number: u32,
     resource_base: u32,
     resource_mask: u32,
-    root: Screen,
+    motion_buffer_size: u32,
 
-    pub const StatusHeader = extern struct {
-        status: Status,
-        pad0: u8,
-        protocol_major: u16,
-        protocol_minor: u16,
-        length: u16, // in 4-byte units
+    vendor_len: u16,
+    max_request_len: u16,
 
-        pub const Status = enum(u8) {
-            success = 1,
-            failure = 0,
-            authenticate = 2,
-        };
-    };
+    num_roots: u8,
+    num_formats: u8,
 
-    pub const ServerInfo = extern struct {
-        resource_base: u32,
-        resource_mask: u32,
-        pad0: u32 = undefined,
-        vendor_len: u16,
-        pad1: [3]u8 = undefined,
-        num_formats: u8,
-    };
+    image_byte_order: u8,
+    bitmap_format_bit_order: u8,
+    bitmap_format_scanline_unit: u8,
+    bitmap_format_scanline_pad: u8,
+    min_keycode: u8,
+    max_keycode: u8,
 
-    pub const KeyboardInfo = extern struct {
-        vendor_len: u16,
-        max_request_len: u16,
-        num_roots: u8,
-        num_formats: u8,
-        min_keycode: u8,
-        max_keycode: u8,
-        pad0: u8,
-    };
+    pad1: u32 = undefined,
 
-    // TODO: fix this, this function is **very** unstable
-    pub fn get(reader: *std.Io.Reader) !@This() {
-        // _ = try connection.stream.socket.receive(connection.io, reader.buffer[0..8]);
+    pub fn read(reader: *std.Io.Reader) !struct { Setup, Screen } {
         try reader.fillMore();
         defer reader.tossBuffered();
-        const header = try reader.takeStruct(StatusHeader, .little);
+        const setup = try reader.takeStruct(@This(), .little);
 
-        switch (header.status) {
-            .success => {},
-            .failure => return error.Failure,
-            .authenticate => {
-                std.log.info("Authentication required. Run: xhost +local:", .{});
-                return error.Authentication;
-            },
-        }
+        const vendor_pad = (4 - (setup.vendor_len % 4)) % 4;
+        const formats_len = 8 * setup.num_formats;
+        const screens_offset = setup.vendor_len + vendor_pad + formats_len;
+        reader.toss(screens_offset);
+        const root = try reader.takeStruct(Screen, .little);
 
-        const server_info: ServerInfo = .{
-            .resource_base = std.mem.readInt(u32, reader.buffer[12..16], .little),
-            .resource_mask = std.mem.readInt(u32, reader.buffer[16..20], .little),
-            .vendor_len = std.mem.readInt(u16, reader.buffer[24..26], .little),
-            .num_formats = reader.buffer[29],
-        };
-        // reader.toss(4);
-        // const server_info = try reader.takeStruct(ServerInfo, .little);
-
-        const vendor_pad = (4 - (server_info.vendor_len % 4)) % 4;
-        const formats_len = 8 *| server_info.num_formats;
-        const screens_offset = 40 + server_info.vendor_len + vendor_pad + formats_len;
-        reader.seek += screens_offset;
-        // const root = try reader.takeStruct(Screen, .little);
-
-        const root_window: Window = @enumFromInt(std.mem.readInt(u32, reader.buffer[screens_offset .. screens_offset + 4][0..4], .little));
-        const root_visual: VisualID = @enumFromInt(std.mem.readInt(u32, reader.buffer[screens_offset + 32 .. screens_offset + 36][0..4], .little));
-        var root: Screen = std.mem.zeroes(Screen);
-        root.window = root_window;
-        root.visual_id = root_visual;
-
-        return .{
-            .resource_base = server_info.resource_base,
-            .resource_mask = server_info.resource_mask,
-            .root = root,
-        };
+        return .{ setup, root };
     }
 
-    // pub fn get(reader: *std.Io.Reader) !@This() {
-    //     const header = try reader.takeStruct(StatusHeader, .little);
-    //     const server_info = try reader.takeStruct(Info, .little);
-    //     const keyboard_info = try reader.takeStruct(KeyboardInfo, .little);
-
-    //     const vendor_offset = 6;
-    //     const vendor = (try reader.take(keyboard_info.vendor_len + vendor_offset))[vendor_offset..];
-    //     try reader.fill((4 - (vendor.len % 4)) % 4);
-
-    //     const root_screen = try reader.takeStruct(Screen, .little);
-
-    //     return .{
-    //         .header = header,
-    //         .server_info = server_info,
-    //         .keyboard_info = keyboard_info,
-    //         .vendor = vendor,
-    //         .root_screen = root_screen,
-    //     };
-    // }
-
     pub fn nextId(self: *@This(), comptime T: type) T {
+        const resource_count = 0; // TODO: fix
         if (@typeInfo(T).@"enum".tag_type != ID.Tag) @compileError("invalid type given to nextId");
-        const id = self.resource_base | (self.resource_count & self.resource_mask);
-        self.resource_count += 1;
+        const id = self.resource_base | (resource_count & self.resource_mask);
+        // resource_count += 1;
         return @enumFromInt(id);
     }
 };
@@ -489,7 +541,7 @@ pub const Window = enum(ID.Tag) {
 
         try writer.writeStruct(req, .little);
 
-        try writer.writeInt(u32, 0xff2F768A, .little);
+        try writer.writeInt(u32, 0x00000000, .little);
         try writer.writeInt(u32, @bitCast(Event.Mask{ .exposure = true, .key_press = true, .key_release = true, .focus_change = true, .button_press = true, .button_release = true }), .little);
     }
 
@@ -504,6 +556,55 @@ pub const Window = enum(ID.Tag) {
     pub fn map(self: @This(), writer: *std.Io.Writer) !void {
         const req: Map = .{ .window = self };
         try writer.writeStruct(req, .little);
+    }
+
+    pub fn changeProperty(self: @This(), writer: *std.Io.Writer, mode: Property.ChangeMode, property: Atom, @"type": Atom, format: Format, data: []const u8) !void {
+        try Property.change(writer, mode, self, property, @"type", format, data);
+    }
+};
+
+pub const Format = enum(u8) {
+    @"8" = 8,
+    @"16" = 16,
+    @"32" = 32,
+};
+
+pub const Property = struct {
+    pub const Header = extern struct {
+        opcode: request.Opcode = .change_property,
+        mode: ChangeMode,
+        pad0: u16 = undefined,
+        window: Window,
+        property: Atom,
+        type: Atom,
+        format: Format,
+        pad1: [3]u8 = undefined,
+    };
+
+    pub const ChangeMode = enum(u8) {
+        replace = 0,
+        prepend = 1,
+        append = 2,
+    };
+
+    pub fn change(writer: *std.Io.Writer, mode: ChangeMode, window: Window, property: Atom, @"type": Atom, format: Format, data: []const u8) !void {
+        const header: Header = .{
+            .mode = mode,
+            .window = window,
+            .property = property,
+            .type = @"type",
+            .format = format,
+        };
+        try writer.writeStruct(header, .little);
+        const element_count = switch (format) {
+            .@"8" => data.len,
+            .@"16" => data.len / 2,
+            .@"32" => data.len / 4,
+        };
+        try writer.writeInt(u32, @intCast(element_count), .little);
+        writer.end += (4 - (data.len % 4)) % 4;
+        try writer.writeAll(data);
+        try writer.flush();
     }
 };
 
@@ -942,12 +1043,6 @@ pub const Event = union(Tag) {
         format: Format,
         data: [20]u8, // raw client data
 
-        pub const Format = enum(u8) {
-            @"8" = 8,
-            @"16" = 16,
-            @"32" = 32,
-            _,
-        };
     };
 
     pub const MappingNotify = extern struct {
