@@ -9,33 +9,37 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer threaded.deinit();
     const io = threaded.io();
 
-    const connection: x.Connection = try .initExplicit(io, x.Connection.default_display_path, null);
+    var connection: x.Connection = try .initExplicit(io, x.Connection.default_display_path, null);
     defer connection.close();
 
-    var stream_reader_buffer: [16 * 1024]u8 = undefined;
-    var stream_reader = connection.stream.reader(io, &stream_reader_buffer);
-    const reader = &stream_reader.interface;
+    var connection_reader_buffer: [16 * 1024]u8 = undefined;
+    var connection_reader = connection.stream.reader(io, &connection_reader_buffer);
+    const reader = &connection_reader.interface;
 
-    var stream_writer_buffer: [16 * 1024]u8 = undefined;
-    var stream_writer = connection.stream.writer(io, &stream_writer_buffer);
-    const writer = &stream_writer.interface;
+    var connection_writer_buffer: [16 * 1024]u8 = undefined;
+    var connection_writer = connection.stream.writer(io, &connection_writer_buffer);
+    const writer = &connection_writer.interface;
 
-    var setup, const root = try x.Setup.read(reader);
+    const glx = try x.Extension.query(.GLX, reader, writer);
+    std.debug.print("glx: {any}\n", .{glx});
 
-    const window: x.Window = setup.nextId(x.Window);
+    const window: x.Window = connection.nextId(x.Window);
     try window.create(writer, .{
-        .parent = root.window,
+        .parent = connection.root_screen.window,
         .width = 600,
         .height = 300,
         .border_width = 1,
-        .visual_id = root.visual_id,
+        .visual_id = connection.root_screen.visual_id,
     });
+    defer window.destroy(writer);
 
     try window.map(writer);
     try writer.flush();
 
     // const utf8_string_atom: x.Atom = try .getInternal(reader, writer, "UTF8_STRING", false);
     // try window.changeProperty(writer, .replace, .wm_name, utf8_string_atom, .@"8", "Title");
+
+    // try window.setHints(reader, writer, .{ .flags = .{ .max_size = true }, .max_width = 900, .max_height = 900 });
 
     main_loop: while (true) {
         while (try x.Event.next(connection, reader)) |event| switch (event) {
