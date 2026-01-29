@@ -101,7 +101,7 @@ pub const Event = union(Tag) {
 
     /// The keycode is in the header.detail field
     pub const Key = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         time_ms: u32,
         root: Window,
         event: Window,
@@ -116,7 +116,7 @@ pub const Event = union(Tag) {
     };
 
     pub const Button = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         window: Window,
         root: Window,
         child: Window,
@@ -143,7 +143,7 @@ pub const Event = union(Tag) {
     };
 
     pub const MotionNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         window: Window,
         root: Window,
         child: Window,
@@ -176,7 +176,7 @@ pub const Event = union(Tag) {
     };
 
     pub const EnterLeaveNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         window: Window,
         root: Window,
         child: Window,
@@ -193,7 +193,7 @@ pub const Event = union(Tag) {
     };
 
     pub const FocusInOut = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         detail: NotifyDetail,
         pad0: [3]u8 = undefined,
         window: Window,
@@ -202,12 +202,13 @@ pub const Event = union(Tag) {
     };
 
     pub const KeymapNotify = extern struct {
-        header: request.Header,
-        key_vector: [32]u8,
+        response_type: request.Response.Type,
+        detail: u8,
+        keys: [30]u8,
     };
 
     pub const Expose = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         window: Window,
         x: i16,
         y: i16,
@@ -218,7 +219,7 @@ pub const Event = union(Tag) {
     };
 
     pub const GraphicsExpose = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         drawable: u32,
         x: i16,
         y: i16,
@@ -230,14 +231,14 @@ pub const Event = union(Tag) {
     };
 
     pub const NoExpose = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         drawable: u32,
         major_code: u16,
         minor_code: u16,
     };
 
     pub const VisibilityNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         window: Window,
         state: State,
 
@@ -249,7 +250,7 @@ pub const Event = union(Tag) {
     };
 
     pub const CreateNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         parent: Window,
         window: Window,
         x: i16,
@@ -261,33 +262,33 @@ pub const Event = union(Tag) {
     };
 
     pub const DestroyNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         event: Window,
         window: Window,
     };
 
     pub const UnmapNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         event: Window,
         window: Window,
         from_configure: bool,
     };
 
     pub const MapNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         event: Window,
         window: Window,
         override_redirect: bool,
     };
 
     pub const MapRequest = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         parent: Window,
         window: Window,
     };
 
     pub const ReparentNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         event: Window,
         window: Window,
         parent: Window,
@@ -297,7 +298,7 @@ pub const Event = union(Tag) {
     };
 
     pub const ConfigureNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         event: Window,
         window: Window,
         above_sibling: Window,
@@ -310,7 +311,7 @@ pub const Event = union(Tag) {
     };
 
     pub const ConfigureRequest = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         parent: Window,
         window: Window,
         x: i16,
@@ -343,7 +344,7 @@ pub const Event = union(Tag) {
     };
 
     pub const GravityNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         event: Window,
         window: Window,
         x: i16,
@@ -351,7 +352,7 @@ pub const Event = union(Tag) {
     };
 
     pub const ResizeRequest = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         window: Window,
         width: u16,
         height: u16,
@@ -363,21 +364,21 @@ pub const Event = union(Tag) {
     };
 
     pub const CirculateNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         event: Window,
         window: Window,
         place: Place,
     };
 
     pub const CirculateRequest = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         parent: Window,
         window: Window,
         place: Place,
     };
 
     pub const PropertyNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         window: Window,
         atom: Atom,
         time_ms: u32,
@@ -390,14 +391,14 @@ pub const Event = union(Tag) {
     };
 
     pub const SelectionClear = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         time_ms: u32,
         owner: Window,
         selection: Atom,
     };
 
     pub const SelectionRequest = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         owner: Window,
         requestor: Window,
         selection: Atom,
@@ -407,7 +408,7 @@ pub const Event = union(Tag) {
     };
 
     pub const SelectionNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         requestor: Window,
         selection: Atom,
         target: Atom,
@@ -416,7 +417,7 @@ pub const Event = union(Tag) {
     };
 
     pub const ColormapNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         window: Window,
         colormap: u32,
         new: New,
@@ -434,7 +435,7 @@ pub const Event = union(Tag) {
     };
 
     pub const ClientMessage = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         window: Window,
         type: Atom,
         format: Format,
@@ -443,14 +444,14 @@ pub const Event = union(Tag) {
     };
 
     pub const MappingNotify = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         request: u8, // Mapping modifier
         first_keycode: u8,
         count: u8,
     };
 
     pub const NonStandard = extern struct {
-        header: request.Header,
+        header: request.event.Header,
         data: [32]u8, // arbitrary non-standard event payload
     };
 
@@ -503,10 +504,10 @@ pub const Event = union(Tag) {
             error.EndOfStream => .close,
             else => err,
         };
-        const reply = try c.reader.peekArray(2);
+        const header = try c.reader.peekStruct(request.event.Header, .little);
 
-        switch (std.enums.fromInt(request.Reply, reply[0]) orelse .event) {
-            .err => return switch (reply[1]) {
+        switch (header.response_type) {
+            .err => return switch (header.detail) {
                 1 => error.Request,
                 2 => error.Value,
                 3 => error.Window,
@@ -524,13 +525,13 @@ pub const Event = union(Tag) {
                 15 => error.Name,
                 16 => error.Length,
                 17 => error.Implementation,
-                else => error.Unknown,
+                else => null,
             },
             .reply => return null,
             else => {},
         }
 
-        const event: @This() = switch (@as(Tag, @enumFromInt(reply[0]))) {
+        return switch (@as(Tag, @enumFromInt(@intFromEnum(header.response_type)))) {
             .key_press => .{ .key_press = try c.reader.takeStruct(Key, .little) },
             .key_release => .{ .key_release = try c.reader.takeStruct(Key, .little) },
             .button_press => .{ .button_press = try c.reader.takeStruct(Button, .little) },
@@ -567,6 +568,5 @@ pub const Event = union(Tag) {
 
             else => .{ .non_standard = try c.reader.takeStruct(NonStandard, .little) },
         };
-        return event;
     }
 };

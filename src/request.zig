@@ -124,16 +124,14 @@ pub const Header = extern struct {
     opcode: Opcode,
     detail: u8 = 0, // usually 0
     length: u16, // total length of request in 4-byte units
-
-    pub fn getLength(comptime T: type) comptime_int {
-        return @sizeOf(@This()) - @sizeOf(T);
-    }
 };
 
-pub const Reply = enum(u8) {
-    err = 0,
-    reply = 1,
-    event = 2,
+pub const Response = struct {
+    pub const Type = enum(u8) {
+        err = 0,
+        reply = 1,
+        _,
+    };
 };
 
 // Specifc things
@@ -146,6 +144,21 @@ pub const Connect = extern struct {
     auth_name_len: u16 = 0,
     auth_data_len: u16 = 0,
     pad1: u16 = undefined,
+};
+
+pub const event = struct {
+    pub const Header = extern struct {
+        response_type: Response.Type,
+        detail: u8,
+        sequence_number: u16,
+
+        pub const Full = extern struct {
+            response_type: Response.Type,
+            detail: u8,
+            sequence_number: u16,
+            time_ms: u32,
+        };
+    };
 };
 
 pub const extension = struct {

@@ -282,7 +282,7 @@ pub const Window = enum(Id.Tag) {
         try c.reader.fillMore();
         defer c.reader.tossBuffered();
 
-        const reply = try c.reader.takeEnum(request.Reply, .little);
+        const reply = try c.reader.takeEnum(request.Response, .little);
         if (reply != .reply) return error.InvalidReply;
     }
 };
@@ -339,6 +339,13 @@ pub const Extension = enum(u8) {
     Composite,
     @"MIT-SHM",
     _,
+
+    pub const Info = struct {
+        major_opcode: u8,
+        first_event: u8,
+        num_events: ?u8,
+        first_error: u8,
+    };
 
     pub fn query(self: @This(), reader: *std.Io.Reader, writer: *std.Io.Writer) !request.extension.QueryReply {
         const name: []const u8 = @tagName(self);

@@ -11,6 +11,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     const address: std.Io.net.UnixAddress = try .init(x.Connection.default_display_path);
     const stream = try address.connect(io);
+    defer stream.close(io);
 
     var stream_reader_buffer: [@sizeOf(x.request.Connect) + @sizeOf(x.Screen) + @sizeOf(x.Setup) + 32]u8 = undefined;
     var stream_reader = stream.reader(io, &stream_reader_buffer);
