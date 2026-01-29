@@ -483,9 +483,10 @@ pub const Event = union(Tag) {
         pad0: u7 = 0,
     };
 
-    pub fn next(connection: Connection, reader: *std.Io.Reader) !?@This() {
+    pub fn next(c: Connection) !?@This() {
+        const stream_reader: *std.Io.net.Stream.Reader = @fieldParentPtr("interface", c.reader);
         var pfd = [_]std.posix.pollfd{.{
-            .fd = connection.stream.socket.handle,
+            .fd = stream_reader.stream.socket.handle,
             .events = std.posix.POLL.IN,
             .revents = 0,
         }};
@@ -497,15 +498,15 @@ pub const Event = union(Tag) {
             if ((pfd[0].revents & std.posix.POLL.ERR) != 0) return .close;
         if ((pfd[0].revents & std.posix.POLL.HUP) != 0) return .close;
 
-        reader.tossBuffered();
-        reader.fillMore() catch |err| return switch (err) {
+        c.reader.tossBuffered();
+        c.reader.fillMore() catch |err| return switch (err) {
             error.EndOfStream => .close,
             else => err,
         };
-        const code = try reader.takeByte();
+        const reply = try c.reader.peekArray(2);
 
-        switch (std.enums.fromInt(request.Reply, code) orelse .event) {
-            .err => return switch (try reader.takeByte()) {
+        switch (std.enums.fromInt(request.Reply, reply[0]) orelse .event) {
+            .err => return switch (reply[1]) {
                 1 => error.Request,
                 2 => error.Value,
                 3 => error.Window,
@@ -529,42 +530,42 @@ pub const Event = union(Tag) {
             else => {},
         }
 
-        const event: @This() = switch (@as(Tag, @enumFromInt(code))) {
-            .key_press => .{ .key_press = try reader.takeStruct(Key, .little) },
-            .key_release => .{ .key_release = try reader.takeStruct(Key, .little) },
-            .button_press => .{ .button_press = try reader.takeStruct(Button, .little) },
-            .button_release => .{ .button_release = try reader.takeStruct(Button, .little) },
-            .motion_notify => .{ .motion_notify = try reader.takeStruct(MotionNotify, .little) },
-            .enter_notify => .{ .enter_notify = try reader.takeStruct(EnterLeaveNotify, .little) },
-            .leave_notify => .{ .leave_notify = try reader.takeStruct(EnterLeaveNotify, .little) },
-            .focus_in => .{ .focus_in = try reader.takeStruct(FocusInOut, .little) },
-            .focus_out => .{ .focus_out = try reader.takeStruct(FocusInOut, .little) },
-            .keymap_notify => .{ .keymap_notify = try reader.takeStruct(KeymapNotify, .little) },
-            .expose => .{ .expose = try reader.takeStruct(Expose, .little) },
-            .graphics_expose => .{ .graphics_expose = try reader.takeStruct(GraphicsExpose, .little) },
-            .no_expose => .{ .no_expose = try reader.takeStruct(NoExpose, .little) },
-            .visibility_notify => .{ .visibility_notify = try reader.takeStruct(VisibilityNotify, .little) },
-            .create_notify => .{ .create_notify = try reader.takeStruct(CreateNotify, .little) },
-            .destroy_notify => .{ .destroy_notify = try reader.takeStruct(DestroyNotify, .little) },
-            .unmap_notify => .{ .unmap_notify = try reader.takeStruct(UnmapNotify, .little) },
-            .map_notify => .{ .map_notify = try reader.takeStruct(MapNotify, .little) },
-            .map_request => .{ .map_request = try reader.takeStruct(MapRequest, .little) },
-            .reparent_notify => .{ .reparent_notify = try reader.takeStruct(ReparentNotify, .little) },
-            .configure_notify => .{ .configure_notify = try reader.takeStruct(ConfigureNotify, .little) },
-            .configure_request => .{ .configure_request = try reader.takeStruct(ConfigureRequest, .little) },
-            .gravity_notify => .{ .gravity_notify = try reader.takeStruct(GravityNotify, .little) },
-            .resize_request => .{ .resize_request = try reader.takeStruct(ResizeRequest, .little) },
-            .circulate_notify => .{ .circulate_notify = try reader.takeStruct(CirculateNotify, .little) },
-            .circulate_request => .{ .circulate_request = try reader.takeStruct(CirculateRequest, .little) },
-            .property_notify => .{ .property_notify = try reader.takeStruct(PropertyNotify, .little) },
-            .selection_clear => .{ .selection_clear = try reader.takeStruct(SelectionClear, .little) },
-            .selection_request => .{ .selection_request = try reader.takeStruct(SelectionRequest, .little) },
-            .selection_notify => .{ .selection_notify = try reader.takeStruct(SelectionNotify, .little) },
-            .colormap_notify => .{ .colormap_notify = try reader.takeStruct(ColormapNotify, .little) },
-            .client_message => .{ .client_message = try reader.takeStruct(ClientMessage, .little) },
-            .mapping_notify => .{ .mapping_notify = try reader.takeStruct(MappingNotify, .little) },
+        const event: @This() = switch (@as(Tag, @enumFromInt(reply[0]))) {
+            .key_press => .{ .key_press = try c.reader.takeStruct(Key, .little) },
+            .key_release => .{ .key_release = try c.reader.takeStruct(Key, .little) },
+            .button_press => .{ .button_press = try c.reader.takeStruct(Button, .little) },
+            .button_release => .{ .button_release = try c.reader.takeStruct(Button, .little) },
+            .motion_notify => .{ .motion_notify = try c.reader.takeStruct(MotionNotify, .little) },
+            .enter_notify => .{ .enter_notify = try c.reader.takeStruct(EnterLeaveNotify, .little) },
+            .leave_notify => .{ .leave_notify = try c.reader.takeStruct(EnterLeaveNotify, .little) },
+            .focus_in => .{ .focus_in = try c.reader.takeStruct(FocusInOut, .little) },
+            .focus_out => .{ .focus_out = try c.reader.takeStruct(FocusInOut, .little) },
+            .keymap_notify => .{ .keymap_notify = try c.reader.takeStruct(KeymapNotify, .little) },
+            .expose => .{ .expose = try c.reader.takeStruct(Expose, .little) },
+            .graphics_expose => .{ .graphics_expose = try c.reader.takeStruct(GraphicsExpose, .little) },
+            .no_expose => .{ .no_expose = try c.reader.takeStruct(NoExpose, .little) },
+            .visibility_notify => .{ .visibility_notify = try c.reader.takeStruct(VisibilityNotify, .little) },
+            .create_notify => .{ .create_notify = try c.reader.takeStruct(CreateNotify, .little) },
+            .destroy_notify => .{ .destroy_notify = try c.reader.takeStruct(DestroyNotify, .little) },
+            .unmap_notify => .{ .unmap_notify = try c.reader.takeStruct(UnmapNotify, .little) },
+            .map_notify => .{ .map_notify = try c.reader.takeStruct(MapNotify, .little) },
+            .map_request => .{ .map_request = try c.reader.takeStruct(MapRequest, .little) },
+            .reparent_notify => .{ .reparent_notify = try c.reader.takeStruct(ReparentNotify, .little) },
+            .configure_notify => .{ .configure_notify = try c.reader.takeStruct(ConfigureNotify, .little) },
+            .configure_request => .{ .configure_request = try c.reader.takeStruct(ConfigureRequest, .little) },
+            .gravity_notify => .{ .gravity_notify = try c.reader.takeStruct(GravityNotify, .little) },
+            .resize_request => .{ .resize_request = try c.reader.takeStruct(ResizeRequest, .little) },
+            .circulate_notify => .{ .circulate_notify = try c.reader.takeStruct(CirculateNotify, .little) },
+            .circulate_request => .{ .circulate_request = try c.reader.takeStruct(CirculateRequest, .little) },
+            .property_notify => .{ .property_notify = try c.reader.takeStruct(PropertyNotify, .little) },
+            .selection_clear => .{ .selection_clear = try c.reader.takeStruct(SelectionClear, .little) },
+            .selection_request => .{ .selection_request = try c.reader.takeStruct(SelectionRequest, .little) },
+            .selection_notify => .{ .selection_notify = try c.reader.takeStruct(SelectionNotify, .little) },
+            .colormap_notify => .{ .colormap_notify = try c.reader.takeStruct(ColormapNotify, .little) },
+            .client_message => .{ .client_message = try c.reader.takeStruct(ClientMessage, .little) },
+            .mapping_notify => .{ .mapping_notify = try c.reader.takeStruct(MappingNotify, .little) },
 
-            else => .{ .non_standard = try reader.takeStruct(NonStandard, .little) },
+            else => .{ .non_standard = try c.reader.takeStruct(NonStandard, .little) },
         };
         return event;
     }

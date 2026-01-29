@@ -138,6 +138,16 @@ pub const Reply = enum(u8) {
 
 // Specifc things
 
+pub const Connect = extern struct {
+    order: u8 = 'l', // 'l' or 'B' aka little or big endian
+    pad0: u8 = undefined,
+    protocol_major: u16 = 11,
+    protocol_minor: u16 = 0,
+    auth_name_len: u16 = 0,
+    auth_data_len: u16 = 0,
+    pad1: u16 = undefined,
+};
+
 pub const extension = struct {
     pub const Query = extern struct {
         header: Header,

@@ -6,8 +6,8 @@ pub const Atom = @import("atom.zig").Atom;
 pub const Event = @import("event.zig").Event;
 
 pub const Connection = struct {
-    io: std.Io,
-    stream: std.Io.net.Stream,
+    reader: *std.Io.Reader,
+    writer: *std.Io.Writer,
     setup: Setup = undefined,
     root_screen: Screen = undefined,
     resource_count: u32 = 0,
@@ -15,52 +15,25 @@ pub const Connection = struct {
     pub const default_display_path = "/tmp/.X11-unix/X0";
     pub const auth_protocol = "MIT-MAGIC-COOKIE-1";
 
-    pub const Header = extern struct {
-        order: u8 = 'l', // 'l' or 'B' aka little or big endian
-        pad0: u8 = undefined,
-        protocol_major: u16 = 11,
-        protocol_minor: u16 = 0,
-        auth_name_len: u16 = 0,
-        auth_data_len: u16 = 0,
-        pad1: u16 = undefined,
-    };
-
-    pub fn init(io: std.Io, minimal: std.process.Init.Minimal) !@This() {
-        const display_path = default_display_path; // minimal.environ.getPosix("DISPLAY")
-        const xauthority = minimal.environ.getPosix("XAUTHORITY");
-        return initExplicit(io, display_path, xauthority);
-    }
-
-    pub fn initExplicit(io: std.Io, display_path: []const u8, xauthority: ?[]const u8) !@This() {
-        const address: std.Io.net.UnixAddress = try .init(display_path);
-        const stream = try address.connect(io);
-
-        var stream_reader_buffer: [@sizeOf(Header) + @sizeOf(Screen) + @sizeOf(Setup) + 32]u8 = undefined;
-        var stream_reader = stream.reader(io, &stream_reader_buffer);
-        const reader = &stream_reader.interface;
-
-        var stream_writer_buffer: [@sizeOf(Header)]u8 = undefined;
-        var stream_writer = stream.writer(io, &stream_writer_buffer);
-        const writer = &stream_writer.interface;
-
+    pub fn init(io: std.Io, reader: *std.Io.Reader, writer: *std.Io.Writer, xauthority: ?[]const u8) !@This() {
         if (xauthority != null) {
             var cookie_buffer: [32]u8 = undefined;
             const cookie_len = try findCookie(io, xauthority.?, &cookie_buffer);
             const cookie = cookie_buffer[0..cookie_len];
 
-            const header: Header = .{
+            const req: request.Connect = .{
                 .auth_name_len = @intCast(auth_protocol.len),
                 .auth_data_len = @intCast(cookie.len),
             };
 
-            try writer.writeStruct(header, .little);
+            try writer.writeStruct(req, .little);
             try writer.writeAll(auth_protocol);
             writer.end += (4 - (writer.end % 4)) % 4; // Padding
             try writer.writeAll(cookie[0..cookie_len]);
             writer.end += (4 - (writer.end % 4)) % 4; // Padding
         } else {
-            const header: Header = .{};
-            try writer.writeStruct(header, .little);
+            const req: request.Connect = .{};
+            try writer.writeStruct(req, .little);
         }
 
         try writer.flush();
@@ -68,15 +41,11 @@ pub const Connection = struct {
         const setup, const root_screen = try Setup.read(reader);
 
         return .{
-            .io = io,
-            .stream = stream,
+            .reader = reader,
+            .writer = writer,
             .setup = setup,
             .root_screen = root_screen,
         };
-    }
-
-    pub fn close(self: @This()) void {
-        self.stream.close(self.io);
     }
 
     pub fn nextId(self: *@This(), comptime T: type) T {
@@ -266,7 +235,7 @@ pub const Window = enum(Id.Tag) {
         };
     };
 
-    pub fn create(self: @This(), writer: *std.Io.Writer, config: Config) !void {
+    pub fn create(self: @This(), c: Connection, config: Config) !void {
         const flag_count = 2;
         const request_length: u16 = 8 + flag_count;
 
@@ -286,34 +255,34 @@ pub const Window = enum(Id.Tag) {
             .value_mask = .{ .event_mask = true, .background_pixel = true },
         };
 
-        try writer.writeStruct(req, .little);
+        try c.writer.writeStruct(req, .little);
 
-        try writer.writeInt(u32, 0x00000000, .little);
-        try writer.writeStruct(Event.Mask{ .exposure = true, .key_press = true, .key_release = true, .focus_change = true, .button_press = true, .button_release = true }, .little);
+        try c.writer.writeInt(u32, 0x00000000, .little);
+        try c.writer.writeStruct(Event.Mask{ .exposure = true, .key_press = true, .key_release = true, .focus_change = true, .button_press = true, .button_release = true }, .little);
     }
 
-    pub fn destroy(self: @This(), writer: *std.Io.Writer) void {
+    pub fn destroy(self: @This(), c: Connection) void {
         const req: request.window.Destroy = .{ .window = self };
-        writer.writeStruct(req, .little) catch {};
-        writer.flush() catch return;
+        c.writer.writeStruct(req, .little) catch {};
+        c.writer.flush() catch return;
     }
 
-    pub fn map(self: @This(), writer: *std.Io.Writer) !void {
+    pub fn map(self: @This(), c: Connection) !void {
         const req: request.window.Map = .{ .window = self };
-        try writer.writeStruct(req, .little);
+        try c.writer.writeStruct(req, .little);
     }
 
-    pub fn changeProperty(self: @This(), writer: *std.Io.Writer, mode: Property.ChangeMode, property: Atom, @"type": Atom, format: Format, data: []const u8) !void {
-        try Property.change(writer, mode, self, property, @"type", format, data);
+    pub fn changeProperty(self: @This(), c: Connection, mode: Property.ChangeMode, property: Atom, @"type": Atom, format: Format, data: []const u8) !void {
+        try Property.change(c, mode, self, property, @"type", format, data);
     }
 
-    pub fn setHints(self: @This(), reader: *std.Io.Reader, writer: *std.Io.Writer, hints: Hints) !void {
-        reader.tossBuffered();
-        try self.changeProperty(writer, .append, .wm_size_hints, .atom, .@"32", &std.mem.toBytes(hints));
-        try reader.fillMore();
-        defer reader.tossBuffered();
+    pub fn setHints(self: @This(), c: Connection, hints: Hints) !void {
+        c.reader.tossBuffered();
+        try self.changeProperty(c, .append, .wm_size_hints, .atom, .@"32", &std.mem.toBytes(hints));
+        try c.reader.fillMore();
+        defer c.reader.tossBuffered();
 
-        const reply = try reader.takeEnum(request.Reply, .little);
+        const reply = try c.reader.takeEnum(request.Reply, .little);
         if (reply != .reply) return error.InvalidReply;
     }
 };
@@ -342,7 +311,7 @@ pub const Property = struct {
         append = 2,
     };
 
-    pub fn change(writer: *std.Io.Writer, mode: ChangeMode, window: Window, property: Atom, @"type": Atom, format: Format, data: []const u8) !void {
+    pub fn change(c: Connection, mode: ChangeMode, window: Window, property: Atom, @"type": Atom, format: Format, data: []const u8) !void {
         const header: Header = .{
             .mode = mode,
             .window = window,
@@ -350,16 +319,16 @@ pub const Property = struct {
             .type = @"type",
             .format = format,
         };
-        try writer.writeStruct(header, .little);
+        try c.writer.writeStruct(header, .little);
         const element_count = switch (format) {
             .@"8" => data.len,
             .@"16" => data.len / 2,
             .@"32" => data.len / 4,
         };
-        try writer.writeInt(u32, @intCast(element_count), .little);
-        writer.end += (4 - (data.len % 4)) % 4;
-        try writer.writeAll(data);
-        try writer.flush();
+        try c.writer.writeInt(u32, @intCast(element_count), .little);
+        c.writer.end += (4 - (data.len % 4)) % 4;
+        try c.writer.writeAll(data);
+        try c.writer.flush();
     }
 };
 
